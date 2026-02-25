@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Linux.do 授权登录自动允许 + 自动跳转外链
+// @name         Linux.do 增强
 // @namespace    http://tampermonkey.net/
 // @version      0.0.5
 // @description  在 connect.linux.do 页面检测到"允许"按钮时自动点击，在 linux.do 页面自动点击外链跳转
@@ -7,7 +7,10 @@
 // @match        https://connect.linux.do/*
 // @match        https://linux.do/*
 // @grant        none
+// @license      MIT
 // @run-at       document-start
+// @updateURL    https://raw.githubusercontent.com/caolib/js_scripts/main/linux.do/oauth.js
+// @downloadURL  https://raw.githubusercontent.com/caolib/js_scripts/main/linux.do/oauth.js
 // ==/UserScript==
 
 (function () {
@@ -15,7 +18,7 @@
 
     const isConnectPage = location.hostname === 'connect.linux.do';
 
-    // ========== 授权登录自动允许（激进模式） ==========
+    // ========== 授权登录自动允许 ==========
     if (isConnectPage) {
         // 更精确：优先匹配 oauth-actions 内的主按钮；兜底匹配 approve 链接
         const targetSelector =
@@ -69,7 +72,7 @@
         }, 2000);
     }
 
-    // ========== 自动点击外链跳转（轻量模式） ==========
+    // ========== 自动点击外链跳转 ==========
     else {
         const modalSelector = '.external-link-modal';
         const btnSelector = '.d-modal__footer .btn-primary';

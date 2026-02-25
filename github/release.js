@@ -1,14 +1,16 @@
 // ==UserScript==
 // @name         GitHub Release 增强显示
 // @namespace    http://tampermonkey.net/
-// @version      2.6.1
+// @version      2.6.2
 // @description  github release 所有文件下载量显示；文件安装包分组、添加平台标签；根据用户当前系统排序，推荐最可能安装的文件（兼容手机与PC端）
-// @author       Gemini
+// @author       caolib
 // @match        https://github.com/*
 // @icon         https://github.githubassets.com/pinned-octocat.svg
 // @grant        GM_xmlhttpRequest
 // @connect      api.github.com
 // @license      MIT
+// @updateURL    https://raw.githubusercontent.com/caolib/js_scripts/main/github/release.js
+// @downloadURL  https://raw.githubusercontent.com/caolib/js_scripts/main/github/release.js
 // ==/UserScript==
 
 (function () {
