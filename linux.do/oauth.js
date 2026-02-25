@@ -1,0 +1,98 @@
+// ==UserScript==
+// @name         Linux.do 授权登录自动允许 + 自动跳转外链
+// @namespace    http://tampermonkey.net/
+// @version      0.0.5
+// @description  在 connect.linux.do 页面检测到"允许"按钮时自动点击，在 linux.do 页面自动点击外链跳转
+// @author       caolib
+// @match        https://connect.linux.do/*
+// @match        https://linux.do/*
+// @grant        none
+// @run-at       document-start
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    const isConnectPage = location.hostname === 'connect.linux.do';
+
+    // ========== 授权登录自动允许（激进模式） ==========
+    if (isConnectPage) {
+        // 更精确：优先匹配 oauth-actions 内的主按钮；兜底匹配 approve 链接
+        const targetSelector =
+            '.oauth-actions a.btn-pill.btn-pill-primary[href^="/oauth2/approve/"], ' +
+            '.oauth-actions a[href^="/oauth2/approve/"], ' +
+            'a[href^="/oauth2/approve/"]';
+
+        let clicked = false;
+
+        function tryClickApprove() {
+            if (clicked) return true;
+
+            const btn = document.querySelector(targetSelector);
+            if (!btn) return false;
+
+            clicked = true;
+
+            // 先触发 click（有些站点会埋点/校验）
+            try { btn.click(); } catch (_) { }
+
+            // 再强制跳转到绝对地址，避免 click 被拦
+            const href = btn.href || (btn.getAttribute('href') ? new URL(btn.getAttribute('href'), location.origin).href : '');
+            if (href) location.assign(href);
+
+            return true;
+        }
+
+        // 高频轮询（别用 1ms，浏览器实际也会被 clamp；10ms 更稳更省）
+        const interval = setInterval(() => {
+            if (tryClickApprove()) clearInterval(interval);
+        }, 10);
+
+        // RAF 并行检测
+        (function rafCheck() {
+            if (!clicked && !tryClickApprove()) requestAnimationFrame(rafCheck);
+        })();
+
+        // MutationObserver
+        const observer = new MutationObserver(() => {
+            if (tryClickApprove()) observer.disconnect();
+        });
+
+        if (document.documentElement) {
+            observer.observe(document.documentElement, { childList: true, subtree: true });
+        }
+
+        // 2 秒后清理
+        setTimeout(() => {
+            clearInterval(interval);
+            observer.disconnect();
+        }, 2000);
+    }
+
+    // ========== 自动点击外链跳转（轻量模式） ==========
+    else {
+        const modalSelector = '.external-link-modal';
+        const btnSelector = '.d-modal__footer .btn-primary';
+
+        const observer = new MutationObserver((mutations) => {
+            for (const mutation of mutations) {
+                for (const node of mutation.addedNodes) {
+                    if (node.nodeType === 1) {
+                        if (node.matches?.(modalSelector) || node.querySelector?.(modalSelector)) {
+                            const btn = document.querySelector(btnSelector);
+                            if (btn) btn.click();
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+
+        const startObserve = () => {
+            observer.observe(document.body, { childList: true, subtree: true });
+        };
+
+        if (document.body) startObserve();
+        else document.addEventListener('DOMContentLoaded', startObserve, { once: true });
+    }
+})();
