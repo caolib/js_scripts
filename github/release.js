@@ -1,12 +1,15 @@
 // ==UserScript==
 // @name         GitHub Release 增强显示
 // @namespace    http://tampermonkey.net/
-// @version      2.6.2
-// @description  github release 所有文件下载量显示；文件安装包分组、添加平台标签；根据用户当前系统排序，推荐最可能安装的文件（兼容手机与PC端）
+// @version      2.7.0
+// @description  github release 所有文件下载量显示；文件安装包分组、添加平台标签；根据用户当前系统排序，推荐最可能安装的文件；将相对时间替换为精确时间（兼容手机与PC端）
 // @author       caolib
 // @match        https://github.com/*
 // @icon         https://github.githubassets.com/pinned-octocat.svg
 // @grant        GM_xmlhttpRequest
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_registerMenuCommand
 // @connect      api.github.com
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/caolib/js_scripts/main/github/release.js
@@ -15,6 +18,34 @@
 
 (function () {
     'use strict';
+
+    // --- 功能开关配置 ---
+    const FEATURES = {
+        groupAndSort:  { key: 'feat_groupSort',   label: '文件分组排序',   default: true },
+        downloadBtn:   { key: 'feat_dlBtn',        label: '显示下载量按钮', default: true },
+        replaceTime:   { key: 'feat_replaceTime',  label: '替换相对时间',   default: true },
+    };
+
+    function isEnabled(feature) {
+        if (typeof GM_getValue === 'undefined') return FEATURES[feature].default;
+        return GM_getValue(FEATURES[feature].key, FEATURES[feature].default);
+    }
+
+    function registerMenus() {
+        if (typeof GM_registerMenuCommand === 'undefined') return;
+        Object.entries(FEATURES).forEach(([featureKey, cfg]) => {
+            const update = () => {
+                const current = GM_getValue(cfg.key, cfg.default);
+                const next = !current;
+                GM_setValue(cfg.key, next);
+                alert(`「${cfg.label}」已${next ? '启用' : '禁用'}，刷新页面生效`);
+            };
+            const state = () => isEnabled(featureKey) ? '✅' : '❌';
+            GM_registerMenuCommand(`${state()} ${cfg.label}`, update);
+        });
+    }
+
+    registerMenus();
 
     // --- 注入 CSS 样式 ---
     function injectCSS() {
@@ -81,6 +112,38 @@
       }
     `;
         document.head.appendChild(style);
+    }
+
+    // --- 相对时间替换 ---
+    function replaceOneTime(el) {
+        const dt = el.getAttribute('datetime');
+        if (!dt) return;
+        const d = new Date(dt);
+        if (isNaN(d.getTime())) return;
+        const pad = n => String(n).padStart(2, '0');
+        const formatted =
+            `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ` +
+            `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+        el.setAttribute('data-gh-replaced', '1');
+        // 同时替换 Shadow DOM（实际渲染层）和 Light DOM（fallback）
+        if (el.shadowRoot) {
+            el.shadowRoot.textContent = formatted;
+        }
+        el.textContent = formatted;
+        el.style.cssText = 'font-variant-numeric: tabular-nums;';
+    }
+
+    function replaceRelativeTimes() {
+        document.querySelectorAll('relative-time:not([data-gh-replaced])').forEach(replaceOneTime);
+    }
+
+    let _timeObserver = null;
+    function startTimeObserver() {
+        if (_timeObserver) return;
+        _timeObserver = new MutationObserver(() => {
+            document.querySelectorAll('relative-time:not([data-gh-replaced])').forEach(replaceOneTime);
+        });
+        _timeObserver.observe(document.body, { childList: true, subtree: true });
     }
 
     // --- 工具函数 ---
@@ -165,8 +228,8 @@
             else if (groupId === 'android') groupScore = 3500;
             else if (groupId === 'ios') groupScore = 3000;
             else if (groupId === 'other') groupScore = 2000;
-            else if (groupId === 'source') groupScore = -1000;
-            else if (groupId === 'meta') groupScore = -2000;
+            else if (groupId === 'meta') groupScore = -1000;
+            else if (groupId === 'source') groupScore = -2000;
         }
 
         if (name.includes('x64') || name.includes('amd64') || name.includes('x86_64')) innerScore += 50;
@@ -279,7 +342,7 @@
 
             if (row._groupInfo.showTag) {
                 const tag = document.createElement('span');
-                tag.className = `Label ${row._groupInfo.labelClass} gh-platform-tag`;
+                tag.className = `Label ${row._groupInfo.labelClass} gh-platform-tag mr-2`;
                 tag.textContent = row._groupInfo.name;
                 metaContainer.appendChild(tag);
             }
@@ -314,7 +377,7 @@
 
                 const metaContainer = row.querySelector('.gh-meta-container');
                 if (metaContainer) {
-                    metaContainer.insertBefore(countSpan, metaContainer.firstChild);
+                    metaContainer.appendChild(countSpan);
                 }
             }
         });
@@ -360,7 +423,7 @@
         details.dataset.boxProcessed = "true";
 
         if (details.open) {
-            formatAndSortUI(details);
+            if (isEnabled('groupAndSort')) formatAndSortUI(details);
             processProxyButtons(details);
         }
 
@@ -385,40 +448,37 @@
         };
 
         const summary = details.querySelector('summary');
-        if (summary && !summary.dataset.btnInjected) {
+        if (isEnabled('downloadBtn') && summary && !summary.dataset.btnInjected) {
             summary.dataset.btnInjected = 'true';
-            // 【兼容处理】兼容没有 .d-inline-flex 类的手机端情况
             const titleSpan = summary.querySelector('.d-inline-flex.flex-items-center') || summary;
 
-            if (titleSpan) {
-                const btn = document.createElement('button');
-                btn.className = 'Button Button--secondary Button--small ml-3 gh-fetch-dl-btn';
-                btn.innerHTML = `<span class="Button-content"><span class="Button-label">获取下载量</span></span>`;
+            const btn = document.createElement('button');
+            btn.className = 'Button Button--secondary Button--small ml-3 gh-fetch-dl-btn';
+            btn.innerHTML = `<span class="Button-content"><span class="Button-label">显示下载量</span></span>`;
 
-                btn.addEventListener('click', (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
 
-                    if (details.dataset.fetching === "true") return;
+                if (details.dataset.fetching === "true") return;
 
-                    btn.innerHTML = `<span class="Button-content"><span class="Button-label">获取中...</span></span>`;
-                    btn.disabled = true;
+                btn.innerHTML = `<span class="Button-content"><span class="Button-label">获取中...</span></span>`;
+                btn.disabled = true;
 
-                    fetchAndInject().then(() => {
-                        btn.style.display = 'none';
-                    }).catch(() => {
-                        btn.innerHTML = `<span class="Button-content"><span class="Button-label color-fg-danger">获取失败(限流)</span></span>`;
-                        btn.disabled = false;
-                    });
+                fetchAndInject().then(() => {
+                    btn.style.display = 'none';
+                }).catch(() => {
+                    btn.innerHTML = `<span class="Button-content"><span class="Button-label color-fg-danger">获取失败(限流)</span></span>`;
+                    btn.disabled = false;
                 });
+            });
 
-                titleSpan.appendChild(btn);
-            }
+            titleSpan.appendChild(btn);
         }
 
         const observer = new MutationObserver(() => {
             if (details.open) {
-                formatAndSortUI(details);
+                if (isEnabled('groupAndSort')) formatAndSortUI(details);
                 processProxyButtons(details);
                 if (details._assetsData) {
                     injectDownloadCounts(details, details._assetsData);
@@ -429,7 +489,7 @@
 
         details.addEventListener('toggle', () => {
             if (details.open) {
-                formatAndSortUI(details);
+                if (isEnabled('groupAndSort')) formatAndSortUI(details);
                 processProxyButtons(details);
             }
         });
@@ -451,6 +511,11 @@
     }
 
     function init() {
+        if (isEnabled('replaceTime')) {
+            replaceRelativeTimes();
+            startTimeObserver();
+        }
+
         if (!/^\/[^\/]+\/[^\/]+\/releases/.test(window.location.pathname)) return;
 
         injectCSS();
@@ -463,7 +528,9 @@
             const summary = details.querySelector('summary');
             if (summary && /Assets/i.test(summary.textContent)) {
                 const tagName = findTagNameForAssets(details);
-                if (tagName) processReleaseBox(details, repoInfo, tagName);
+                if (tagName && (isEnabled('groupAndSort') || isEnabled('downloadBtn'))) {
+                    processReleaseBox(details, repoInfo, tagName);
+                }
             }
         });
     }

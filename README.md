@@ -1,6 +1,9 @@
-# 我自用的一些油猴脚本
+# 一些自用的油猴脚本
 
-## github
+多数功能都可以单独开启和关闭，在插件面板点击对应功能选项即可关闭
+![image-20260226133708478](https://free.picui.cn/free/2026/02/26/699fdbb96ce02.png)
+
+## 1.github
 
 ### GitHub Release 增强显示
 
@@ -12,9 +15,13 @@
 
 
 
-## linuxdo
+## 2.linuxdo
 
 ### Linux.do 增强
 
-1. 使用 linux.do 授权登录第三方应用时自动点击**允许授权**
-2. L站内点击外链直接跳转
+1.使用 linux.do 授权登录第三方应用时自动点击**允许授权**
+
+![image-20260226132903759](https://free.picui.cn/free/2026/02/26/699fd9dccb148.png)
+
+2.L站内点击外链直接跳转，将不会显示下面弹窗
+![image-20260226133041922](https://free.picui.cn/free/2026/02/26/699fda35848ec.png)
