@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux.do 增强
 // @namespace    http://tampermonkey.net/
-// @version      0.1.0
+// @version      0.1.1
 // @description  在 connect.linux.do 页面检测到「允许」按钮时自动点击；在 linux.do 页面自动点击外链跳转弹窗；支持功能开关
 // @author       caolib
 // @match        https://connect.linux.do/*
@@ -11,8 +11,6 @@
 // @grant        GM_registerMenuCommand
 // @license      MIT
 // @run-at       document-start
-// @updateURL    https://raw.githubusercontent.com/caolib/js_scripts/main/linux.do/oauth.js
-// @downloadURL  https://raw.githubusercontent.com/caolib/js_scripts/main/linux.do/oauth.js
 // ==/UserScript==
 
 (function () {
@@ -20,8 +18,8 @@
 
     // --- 功能开关配置 ---
     const FEATURES = {
-        autoApprove:   { key: 'feat_autoApprove',  label: '自动允许 OAuth 授权', default: true },
-        autoExternal:  { key: 'feat_autoExternal', label: '自动跳过外链弹窗',     default: true },
+        autoApprove: { key: 'feat_autoApprove', label: '自动允许 OAuth 授权', default: true },
+        autoExternal: { key: 'feat_autoExternal', label: '自动跳过外链弹窗', default: true },
     };
 
     function isEnabled(feature) {

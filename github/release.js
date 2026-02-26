@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Release 增强显示
 // @namespace    http://tampermonkey.net/
-// @version      2.7.0
+// @version      2.7.1
 // @description  github release 所有文件下载量显示；文件安装包分组、添加平台标签；根据用户当前系统排序，推荐最可能安装的文件；将相对时间替换为精确时间（兼容手机与PC端）
 // @author       caolib
 // @match        https://github.com/*
@@ -12,8 +12,6 @@
 // @grant        GM_registerMenuCommand
 // @connect      api.github.com
 // @license      MIT
-// @updateURL    https://raw.githubusercontent.com/caolib/js_scripts/main/github/release.js
-// @downloadURL  https://raw.githubusercontent.com/caolib/js_scripts/main/github/release.js
 // ==/UserScript==
 
 (function () {
@@ -21,9 +19,9 @@
 
     // --- 功能开关配置 ---
     const FEATURES = {
-        groupAndSort:  { key: 'feat_groupSort',   label: '文件分组排序',   default: true },
-        downloadBtn:   { key: 'feat_dlBtn',        label: '显示下载量按钮', default: true },
-        replaceTime:   { key: 'feat_replaceTime',  label: '替换相对时间',   default: true },
+        groupAndSort: { key: 'feat_groupSort', label: '文件分组排序', default: true },
+        downloadBtn: { key: 'feat_dlBtn', label: '显示下载量按钮', default: true },
+        replaceTime: { key: 'feat_replaceTime', label: '替换相对时间', default: true },
     };
 
     function isEnabled(feature) {
