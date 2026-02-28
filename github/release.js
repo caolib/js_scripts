@@ -120,8 +120,8 @@
         if (isNaN(d.getTime())) return;
         const pad = n => String(n).padStart(2, '0');
         const formatted =
-            `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ` +
-            `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+            `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+            `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
         el.setAttribute('data-gh-replaced', '1');
         // 同时替换 Shadow DOM（实际渲染层）和 Light DOM（fallback）
         if (el.shadowRoot) {
