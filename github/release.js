@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Release 增强显示
 // @namespace    http://tampermonkey.net/
-// @version      2.7.1
+// @version      2.7.2
 // @description  github release 所有文件下载量显示；文件安装包分组、添加平台标签；根据用户当前系统排序，推荐最可能安装的文件；将相对时间替换为精确时间（兼容手机与PC端）
 // @author       caolib
 // @match        https://github.com/*
@@ -120,8 +120,8 @@
         if (isNaN(d.getTime())) return;
         const pad = n => String(n).padStart(2, '0');
         const formatted =
-            `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ` +
-            `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+            `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+            `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
         el.setAttribute('data-gh-replaced', '1');
         // 同时替换 Shadow DOM（实际渲染层）和 Light DOM（fallback）
         if (el.shadowRoot) {
