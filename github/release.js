@@ -241,6 +241,18 @@
         return groupScore + innerScore;
     }
 
+    function getFileNameFromLink(linkElem) {
+        // 优先从 href 提取真实文件名（兼容显示名被重命名的界面）
+        const href = linkElem.getAttribute('href');
+        if (href) {
+            const lastSegment = decodeURIComponent(href.split('/').pop().split('?')[0]);
+            if (lastSegment) return lastSegment;
+        }
+        // 回退到 span 文本
+        const fileNameSpan = linkElem.querySelector('.Truncate-text');
+        return fileNameSpan ? fileNameSpan.textContent.trim() : linkElem.textContent.trim();
+    }
+
     function formatCount(num) {
         if (num >= 1000000) return (num / 1000000).toFixed(1).replace(/\.0$/, '') + 'm';
         if (num >= 1000) return (num / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
@@ -288,8 +300,7 @@
             let groupInfo = { id: 'other', showTag: false };
 
             if (nameLink) {
-                const fileNameSpan = nameLink.querySelector('.Truncate-text');
-                const fileName = fileNameSpan ? fileNameSpan.textContent.trim() : nameLink.textContent.trim();
+                const fileName = getFileNameFromLink(nameLink);
                 groupInfo = parseFileGroup(fileName);
                 score = calculateMatchScore(fileName, os, groupInfo.id);
             }
@@ -357,8 +368,7 @@
             const nameLink = row.querySelector('a[href*="/releases/download/"], a[href*="/archive/"]');
             if (!nameLink) return;
 
-            const fileNameSpan = nameLink.querySelector('.Truncate-text');
-            const fileName = fileNameSpan ? fileNameSpan.textContent.trim() : nameLink.textContent.trim();
+            const fileName = getFileNameFromLink(nameLink);
 
             const assetData = assets.find(a => a.name === fileName);
             if (assetData && !row.querySelector('.github-dl-count')) {
