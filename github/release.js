@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Release 增强显示
 // @namespace    http://tampermonkey.net/
-// @version      2.7.2
+// @version      2.7.3
 // @description  github release 所有文件下载量显示；文件安装包分组、添加平台标签；根据用户当前系统排序，推荐最可能安装的文件；将相对时间替换为精确时间（兼容手机与PC端）
 // @author       caolib
 // @match        https://github.com/*
@@ -103,6 +103,25 @@
         text-decoration: none !important;
       }
 
+      /* OS 切换下拉框 */
+      .gh-os-select {
+        appearance: auto;
+        background-color: var(--button-default-bgColor-rest, var(--color-btn-bg, #21262d));
+        border: 1px solid var(--button-default-borderColor-rest, var(--color-btn-border, rgba(240,246,252,0.1)));
+        border-radius: 6px;
+        color: var(--button-default-fgColor-rest, var(--color-btn-text, #c9d1d9));
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 500;
+        line-height: 20px;
+        padding: 3px 8px;
+        margin-left: 8px;
+      }
+      .gh-os-select:hover {
+        background-color: var(--button-default-bgColor-hover, var(--color-btn-hover-bg, #30363d));
+        border-color: var(--button-default-borderColor-hover, var(--color-btn-hover-border, rgba(240,246,252,0.3)));
+      }
+
       /* 移动端适配样式 */
       .gh-meta-container { flex-wrap: wrap; gap: 4px; }
       @media (max-width: 768px) {
@@ -155,6 +174,21 @@
         if (ua.includes('linux')) return 'linux';
         return 'unknown';
     }
+
+    let _selectedOS = null;
+    const _processedDetails = [];
+
+    function getActiveOS() {
+        return _selectedOS || getCurrentOS();
+    }
+
+    const OS_OPTIONS = [
+        { value: 'windows', label: 'Windows' },
+        { value: 'mac', label: 'macOS' },
+        { value: 'linux', label: 'Linux' },
+        { value: 'android', label: 'Android' },
+        { value: 'ios', label: 'iOS' },
+    ];
 
     function parseFileGroup(fileName) {
         const name = fileName.toLowerCase();
@@ -282,17 +316,17 @@
 
     // --- 核心解耦逻辑 ---
 
-    function formatAndSortUI(detailsElem) {
+    function formatAndSortUI(detailsElem, force) {
         // 【核心修复1】移除了强依赖的 li.Box-row，改为筛选包含下载链接的通用 li 标签
         const validRows = Array.from(detailsElem.querySelectorAll('li')).filter(r => r.querySelector('a[href*="/releases/download/"], a[href*="/archive/"]'));
         if (validRows.length === 0) return;
 
         const prevCount = parseInt(detailsElem.dataset.validRowCount || '0');
-        if (validRows.length === prevCount) return;
+        if (!force && validRows.length === prevCount) return;
         detailsElem.dataset.validRowCount = validRows.length;
 
         const parentList = validRows[0].parentNode;
-        const os = getCurrentOS();
+        const os = getActiveOS();
 
         validRows.forEach(row => {
             const nameLink = row.querySelector('a[href*="/releases/download/"], a[href*="/archive/"]');
@@ -383,10 +417,17 @@
           <span>${formatCount(assetData.download_count)}</span>
         `;
 
-                const metaContainer = row.querySelector('.gh-meta-container');
-                if (metaContainer) {
-                    metaContainer.appendChild(countSpan);
+                let metaContainer = row.querySelector('.gh-meta-container');
+                if (!metaContainer) {
+                    metaContainer = document.createElement('div');
+                    metaContainer.className = 'gh-meta-container d-flex flex-items-center flex-shrink-0 mr-3';
+                    const rightSection = row.querySelector('.col-md-6') || row.querySelector('.flex-auto.flex-justify-end');
+                    const shaWrapper = rightSection ? rightSection.querySelector('.flex-1') : null;
+                    if (shaWrapper) shaWrapper.insertBefore(metaContainer, shaWrapper.firstChild);
+                    else if (rightSection) rightSection.insertBefore(metaContainer, rightSection.firstChild);
+                    else row.appendChild(metaContainer);
                 }
+                metaContainer.appendChild(countSpan);
             }
         });
     }
@@ -429,21 +470,23 @@
     function processReleaseBox(details, repoInfo, tagName) {
         if (details.dataset.boxProcessed === "true") return;
         details.dataset.boxProcessed = "true";
+        _processedDetails.push(details);
 
         if (details.open) {
             if (isEnabled('groupAndSort')) formatAndSortUI(details);
             processProxyButtons(details);
         }
 
-        const fetchAndInject = async () => {
+        const fetchAndInject = async (forceRefresh) => {
             if (details.dataset.fetching === "true") return;
-            if (details._assetsData) {
+            if (!forceRefresh && details._assetsData) {
                 injectDownloadCounts(details, details._assetsData);
                 return;
             }
 
             details.dataset.fetching = "true";
             try {
+                details.querySelectorAll('.github-dl-count').forEach(el => el.remove());
                 const data = await fetchReleaseData(repoInfo.owner, repoInfo.repo, tagName);
                 details._assetsData = data.assets;
                 injectDownloadCounts(details, data.assets);
@@ -456,9 +499,11 @@
         };
 
         const summary = details.querySelector('summary');
-        if (isEnabled('downloadBtn') && summary && !summary.dataset.btnInjected) {
+        const titleSpan = summary ? (summary.querySelector('.d-inline-flex.flex-items-center') || summary) : null;
+
+        // 下载量按钮（点击后不消失，可重复点击刷新）
+        if (isEnabled('downloadBtn') && titleSpan && !summary.dataset.btnInjected) {
             summary.dataset.btnInjected = 'true';
-            const titleSpan = summary.querySelector('.d-inline-flex.flex-items-center') || summary;
 
             const btn = document.createElement('button');
             btn.className = 'Button Button--secondary Button--small ml-3 gh-fetch-dl-btn';
@@ -470,11 +515,13 @@
 
                 if (details.dataset.fetching === "true") return;
 
+                const isRefresh = !!details._assetsData;
                 btn.innerHTML = `<span class="Button-content"><span class="Button-label">获取中...</span></span>`;
                 btn.disabled = true;
 
-                fetchAndInject().then(() => {
-                    btn.style.display = 'none';
+                fetchAndInject(isRefresh).then(() => {
+                    btn.innerHTML = `<span class="Button-content"><span class="Button-label">刷新下载量</span></span>`;
+                    btn.disabled = false;
                 }).catch(() => {
                     btn.innerHTML = `<span class="Button-content"><span class="Button-label color-fg-danger">获取失败(限流)</span></span>`;
                     btn.disabled = false;
@@ -482,6 +529,39 @@
             });
 
             titleSpan.appendChild(btn);
+        }
+
+        // OS 切换下拉框
+        if (isEnabled('groupAndSort') && titleSpan && !summary.dataset.osSelectInjected) {
+            summary.dataset.osSelectInjected = 'true';
+
+            const select = document.createElement('select');
+            select.className = 'gh-os-select';
+            const detectedOS = getCurrentOS();
+            OS_OPTIONS.forEach(opt => {
+                const option = document.createElement('option');
+                option.value = opt.value;
+                option.textContent = opt.label;
+                if (opt.value === (_selectedOS || detectedOS)) option.selected = true;
+                select.appendChild(option);
+            });
+
+            // 阻止点击下拉框时折叠/展开 details
+            select.addEventListener('click', (e) => e.stopPropagation());
+            select.addEventListener('mousedown', (e) => e.stopPropagation());
+
+            select.addEventListener('change', () => {
+                _selectedOS = select.value;
+                // 同步所有下拉框的选中状态
+                document.querySelectorAll('.gh-os-select').forEach(s => { s.value = _selectedOS; });
+                // 强制重新排序所有已处理的 details
+                _processedDetails.forEach(d => {
+                    d.dataset.validRowCount = '0';
+                    if (d.open) formatAndSortUI(d, true);
+                });
+            });
+
+            titleSpan.appendChild(select);
         }
 
         const observer = new MutationObserver(() => {
