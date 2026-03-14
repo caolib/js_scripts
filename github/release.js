@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Release 增强显示
 // @namespace    http://tampermonkey.net/
-// @version      2.7.3
+// @version      2.7.4
 // @description  github release 所有文件下载量显示；文件安装包分组、添加平台标签；根据用户当前系统排序，推荐最可能安装的文件；将相对时间替换为精确时间（兼容手机与PC端）
 // @author       caolib
 // @match        https://github.com/*
@@ -122,6 +122,16 @@
         border-color: var(--button-default-borderColor-hover, var(--color-btn-hover-border, rgba(240,246,252,0.3)));
       }
 
+      /* 签名/校验文件折叠区 */
+      .gh-meta-files-wrapper > summary {
+        cursor: pointer; padding: 8px 16px; font-size: 12px;
+        color: var(--fgColor-muted, var(--color-fg-muted, #8b949e));
+        border-top: 1px solid var(--borderColor-muted, var(--color-border-muted, #30363d));
+      }
+      .gh-meta-files-wrapper > summary:hover {
+        color: var(--fgColor-default, var(--color-fg-default, #e6edf3));
+      }
+
       /* 移动端适配样式 */
       .gh-meta-container { flex-wrap: wrap; gap: 4px; }
       @media (max-width: 768px) {
@@ -196,14 +206,14 @@
         if (name.endsWith('.sig') || name.endsWith('.sha256') || name.endsWith('.pem') || name.endsWith('.blockmap')) {
             return { id: 'meta', showTag: false };
         }
-        if (name.includes('source') || (name.endsWith('.tar.gz') && !name.includes('linux') && !name.includes('mac') && !name.includes('win'))) {
+        if (name.includes('source') || (name.endsWith('.tar.gz') && !name.endsWith('.app.tar.gz') && !name.includes('linux') && !name.includes('mac') && !name.includes('win'))) {
             return { id: 'source', showTag: false };
         }
 
         if (name.endsWith('.exe') || name.endsWith('.msi') || name.includes('-win') || name.includes('_win')) {
             return { id: 'windows', name: 'Win', labelClass: 'Label--info', showTag: true };
         }
-        if (name.endsWith('.dmg') || name.endsWith('.pkg') || name.includes('-mac') || name.includes('_mac') || name.includes('darwin')) {
+        if (name.endsWith('.dmg') || name.endsWith('.pkg') || name.endsWith('.app.tar.gz') || name.includes('-mac') || name.includes('_mac') || name.includes('darwin')) {
             return { id: 'mac', name: 'Mac', labelClass: '', showTag: true };
         }
 
@@ -335,7 +345,8 @@
 
             if (nameLink) {
                 const fileName = getFileNameFromLink(nameLink);
-                groupInfo = parseFileGroup(fileName);
+                const href = nameLink.getAttribute('href') || '';
+                groupInfo = href.includes('/archive/') ? { id: 'source', showTag: false } : parseFileGroup(fileName);
                 score = calculateMatchScore(fileName, os, groupInfo.id);
             }
             row.dataset.matchScore = score;
@@ -344,11 +355,16 @@
         });
 
         validRows.forEach(row => row.remove());
+        // 清除旧的签名文件折叠区
+        const oldMetaWrapper = parentList.querySelector('.gh-meta-files-wrapper');
+        if (oldMetaWrapper) oldMetaWrapper.remove();
+
         validRows.sort((a, b) => parseInt(b.dataset.matchScore) - parseInt(a.dataset.matchScore));
 
-        validRows.forEach((row) => {
-            parentList.appendChild(row);
+        const normalRows = validRows.filter(r => r._groupInfo.id !== 'meta');
+        const metaRows = validRows.filter(r => r._groupInfo.id === 'meta');
 
+        const applyRowStyle = (row) => {
             row.style.borderTop = '';
             row.style.borderLeft = '';
             row.style.backgroundColor = '';
@@ -362,7 +378,6 @@
                 metaContainer = document.createElement('div');
                 metaContainer.className = 'gh-meta-container d-flex flex-items-center flex-shrink-0 mr-3';
 
-                // 【核心修复2】增强了元素插入点的容错能力，如果找不到右侧包裹层，则直接安全地插入行内
                 const rightSection = row.querySelector('.col-md-6') || row.querySelector('.flex-auto.flex-justify-end');
                 const shaWrapper = rightSection ? rightSection.querySelector('.flex-1') : null;
 
@@ -375,7 +390,6 @@
                     if (leftSection) {
                         leftSection.appendChild(metaContainer);
                     } else {
-                        // 移动端的最简 fallback
                         row.appendChild(metaContainer);
                     }
                 }
@@ -389,7 +403,33 @@
                 tag.textContent = row._groupInfo.name;
                 metaContainer.appendChild(tag);
             }
+        };
+
+        normalRows.forEach((row) => {
+            parentList.appendChild(row);
+            applyRowStyle(row);
         });
+
+        if (metaRows.length > 0) {
+            const wrapper = document.createElement('details');
+            wrapper.className = 'gh-meta-files-wrapper';
+            const summary = document.createElement('summary');
+            summary.textContent = `签名 / 校验文件 (${metaRows.length})`;
+            wrapper.appendChild(summary);
+            metaRows.forEach(row => {
+                wrapper.appendChild(row);
+                applyRowStyle(row);
+            });
+            parentList.appendChild(wrapper);
+        }
+
+        // "Show all X assets" 按钮移至底部
+        const showAllBtn = Array.from(parentList.children).find(child =>
+            !child.querySelector('a[href*="/releases/download/"], a[href*="/archive/"]') &&
+            !child.classList.contains('gh-meta-files-wrapper') &&
+            /show all/i.test(child.textContent)
+        );
+        if (showAllBtn) parentList.appendChild(showAllBtn);
     }
 
     function injectDownloadCounts(detailsElem, assets) {
