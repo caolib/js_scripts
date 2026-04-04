@@ -313,11 +313,24 @@
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
                 method: 'GET',
-                url: `https://api.github.com/repos/${owner}/${repo}/releases/tags/${tag}`,
-                headers: { 'Accept': 'application/vnd.github.v3+json' },
+                url: `https://api.github.com/repos/${owner}/${repo}/releases/tags/${encodeURIComponent(tag)}`,
+                headers: {
+                    'Accept': 'application/vnd.github+json',
+                    'User-Agent': 'GitHub-Release-Helper/2.7.4'
+                },
                 onload: (response) => {
-                    if (response.status === 200) resolve(JSON.parse(response.responseText));
-                    else reject(`API 请求失败: ${response.status}`);
+                    if (response.status === 200) {
+                        resolve(JSON.parse(response.responseText));
+                    } else {
+                        let errMsg = `API 请求失败: ${response.status}`;
+                        try {
+                            const errData = JSON.parse(response.responseText);
+                            if (errData.message) {
+                                errMsg += ` - ${errData.message}`;
+                            }
+                        } catch (e) { }
+                        reject(errMsg);
+                    }
                 },
                 onerror: (err) => reject(err)
             });
