@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Release 增强显示
 // @namespace    http://tampermonkey.net/
-// @version      2.7.4
+// @version      2.7.5
 // @description  github release 所有文件下载量显示；文件安装包分组、添加平台标签；根据用户当前系统排序，推荐最可能安装的文件；将相对时间替换为精确时间（兼容手机与PC端）
 // @author       caolib
 // @match        https://github.com/*
