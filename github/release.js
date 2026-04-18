@@ -102,6 +102,12 @@
         background-color: var(--controlAction-bgColor-hover, var(--color-action-list-item-default-hover-bg)) !important;
         text-decoration: none !important;
       }
+            .gh-proxy-fallback {
+                margin-left: 8px;
+                display: flex;
+                align-items: center;
+                flex-shrink: 0;
+            }
 
       /* OS 切换下拉框 */
       .gh-os-select {
@@ -486,12 +492,87 @@
     }
 
     function processProxyButtons(detailsElem) {
-        const xiuBoxes = detailsElem.querySelectorAll('.XIU2-RS:not([data-dropdown-injected="true"])');
-        xiuBoxes.forEach(xiuBox => {
+        function getOriginalDownloadUrl(row, xiuBox) {
+            const directLink = row.querySelector('a[href*="/releases/download/"], a[href*="/archive/"]');
+            if (directLink) {
+                const href = directLink.getAttribute('href');
+                if (href) return new URL(href, window.location.origin).href;
+            }
+
+            const proxyLink = xiuBox ? xiuBox.querySelector('a.btn[href]') : null;
+            if (!proxyLink) return null;
+
+            const href = proxyLink.getAttribute('href') || '';
+            try {
+                const decoded = decodeURIComponent(href);
+                const match = decoded.match(/(https?:\/\/github\.com\/[^\s]+)$/i);
+                if (match) return match[1];
+            } catch (e) { }
+
+            return null;
+        }
+
+        function mergeProxySources(originalUrl, links) {
+            const merged = [];
+            const seen = new Set();
+
+            const pushIfNew = (href, text) => {
+                if (!href) return;
+                const key = href.trim();
+                if (!key || seen.has(key)) return;
+                seen.add(key);
+                merged.push({ href: key, text: text || '未命名' });
+            };
+
+            if (originalUrl) {
+                pushIfNew(`https://ghproxy.net/${originalUrl}`, '镜像');
+            }
+
+            links.forEach(link => {
+                pushIfNew(link.getAttribute('href') || '', link.textContent.trim());
+            });
+
+            return merged;
+        }
+
+        function ensureProxyBox(row) {
+            let xiuBox = row.querySelector('.XIU2-RS');
+            if (xiuBox) return xiuBox;
+
+            xiuBox = document.createElement('div');
+            xiuBox.className = 'XIU2-RS gh-proxy-fallback';
+
+            const metaContainer = row.querySelector('.gh-meta-container');
+            const rightSection = row.querySelector('.col-md-6') || row.querySelector('.flex-auto.flex-justify-end');
+            const shaWrapper = rightSection ? rightSection.querySelector('.flex-1') : null;
+
+            if (rightSection) {
+                rightSection.appendChild(xiuBox);
+            } else if (metaContainer) {
+                metaContainer.appendChild(xiuBox);
+            } else if (shaWrapper) {
+                shaWrapper.appendChild(xiuBox);
+            } else {
+                row.appendChild(xiuBox);
+            }
+
+            return xiuBox;
+        }
+
+        const validRows = Array.from(detailsElem.querySelectorAll('li')).filter(row =>
+            row.querySelector('a[href*="/releases/download/"], a[href*="/archive/"]')
+        );
+
+        validRows.forEach(row => {
+            const xiuBox = ensureProxyBox(row);
+            if (xiuBox.dataset.dropdownInjected === 'true') return;
+
             xiuBox.dataset.dropdownInjected = 'true';
 
             const links = Array.from(xiuBox.querySelectorAll('a.btn'));
-            if (links.length === 0) return;
+            const originalUrl = getOriginalDownloadUrl(row, xiuBox);
+            const proxySources = mergeProxySources(originalUrl, links);
+            if (proxySources.length === 0) return;
 
             xiuBox.style.display = 'flex';
             xiuBox.style.alignItems = 'center';
@@ -506,9 +587,13 @@
             const menu = document.createElement('div');
             menu.className = 'gh-proxy-dropdown-menu';
 
-            links.forEach(link => {
+            proxySources.forEach(source => {
+                const link = document.createElement('a');
                 link.className = 'gh-proxy-menu-item';
-                link.style.cssText = '';
+                link.href = source.href;
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+                link.textContent = source.text;
                 menu.appendChild(link);
             });
 
