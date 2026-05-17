@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Release 增强显示
 // @namespace    http://tampermonkey.net/
-// @version      2.7.6
+// @version      2.7.7
 // @description  github release 所有文件下载量显示；文件安装包分组、添加平台标签；根据用户当前系统排序，推荐最可能安装的文件；将相对时间替换为精确时间（兼容手机与PC端）
 // @author       caolib
 // @match        https://github.com/*
@@ -53,32 +53,82 @@
         style.innerHTML = `
       .gh-group-win { border-left: 4px solid var(--color-accent-emphasis, #1f6feb) !important; background-color: var(--color-accent-subtle, rgba(56,139,253,0.1)) !important; }
       .gh-group-win:hover { background-color: var(--color-accent-muted, rgba(56,139,253,0.15)) !important; }
+    .gh-group-win a[href*="/releases/download/"], .gh-group-win a[href*="/archive/"] { color: var(--color-accent-emphasis, #1f6feb) !important; }
 
       .gh-group-mac { border-left: 4px solid var(--color-done-emphasis, #8957e5) !important; background-color: var(--color-done-subtle, rgba(137,87,229,0.1)) !important; }
       .gh-group-mac:hover { background-color: var(--color-done-muted, rgba(137,87,229,0.15)) !important; }
+    .gh-group-mac a[href*="/releases/download/"], .gh-group-mac a[href*="/archive/"] { color: var(--color-done-emphasis, #8957e5) !important; }
 
-      .gh-group-mobile { border-left: 4px solid var(--color-success-emphasis, #238636) !important; background-color: var(--color-success-subtle, rgba(46,160,67,0.1)) !important; }
-      .gh-group-mobile:hover { background-color: var(--color-success-muted, rgba(46,160,67,0.15)) !important; }
+            .gh-group-mobile { border-left: 4px solid #e3b341 !important; background-color: rgba(227, 179, 65, 0.12) !important; }
+            .gh-group-mobile:hover { background-color: rgba(227, 179, 65, 0.18) !important; }
+        .gh-group-mobile a[href*="/releases/download/"], .gh-group-mobile a[href*="/archive/"] { color: #e3b341 !important; }
 
       .gh-group-linux-rpm { border-left: 4px solid var(--color-danger-emphasis, #f85149) !important; background-color: var(--color-danger-subtle, rgba(248,81,73,0.1)) !important; }
       .gh-group-linux-rpm:hover { background-color: var(--color-danger-muted, rgba(248,81,73,0.15)) !important; }
+    .gh-group-linux-rpm a[href*="/releases/download/"], .gh-group-linux-rpm a[href*="/archive/"] { color: var(--color-danger-emphasis, #f85149) !important; }
 
       .gh-group-linux-deb { border-left: 4px solid var(--color-severe-emphasis, #db6d28) !important; background-color: var(--color-severe-subtle, rgba(219,109,40,0.1)) !important; }
       .gh-group-linux-deb:hover { background-color: var(--color-severe-muted, rgba(219,109,40,0.15)) !important; }
+    .gh-group-linux-deb a[href*="/releases/download/"], .gh-group-linux-deb a[href*="/archive/"] { color: var(--color-severe-emphasis, #db6d28) !important; }
 
       .gh-group-linux-arch { border-left: 4px solid var(--color-sponsors-emphasis, #bf4b8a) !important; background-color: var(--color-sponsors-subtle, rgba(191,75,138,0.1)) !important; }
       .gh-group-linux-arch:hover { background-color: var(--color-sponsors-muted, rgba(191,75,138,0.15)) !important; }
+    .gh-group-linux-arch a[href*="/releases/download/"], .gh-group-linux-arch a[href*="/archive/"] { color: var(--color-sponsors-emphasis, #bf4b8a) !important; }
 
       .gh-group-linux-appimage { border-left: 4px solid #20c997 !important; background-color: rgba(32, 201, 151, 0.1) !important; }
       .gh-group-linux-appimage:hover { background-color: rgba(32, 201, 151, 0.15) !important; }
+    .gh-group-linux-appimage a[href*="/releases/download/"], .gh-group-linux-appimage a[href*="/archive/"] { color: #20c997 !important; }
 
       .gh-group-linux-flatpak { border-left: 4px solid #0abda0 !important; background-color: rgba(10, 189, 160, 0.1) !important; }
       .gh-group-linux-flatpak:hover { background-color: rgba(10, 189, 160, 0.15) !important; }
+    .gh-group-linux-flatpak a[href*="/releases/download/"], .gh-group-linux-flatpak a[href*="/archive/"] { color: #0abda0 !important; }
 
       .gh-group-linux-other { border-left: 4px solid var(--color-attention-emphasis, #9e6a03) !important; background-color: var(--color-attention-subtle, rgba(210,153,34,0.1)) !important; }
       .gh-group-linux-other:hover { background-color: var(--color-attention-muted, rgba(210,153,34,0.15)) !important; }
+    .gh-group-linux-other a[href*="/releases/download/"], .gh-group-linux-other a[href*="/archive/"] { color: var(--color-attention-emphasis, #9e6a03) !important; }
 
       .gh-group-other { border-left: 4px solid transparent !important; }
+
+            /* 平台标签颜色与分组主色完全一致（镂空） */
+            .gh-platform-tag {
+                background-color: transparent !important;
+            }
+            .gh-platform-tag.gh-tag-win {
+                color: var(--color-accent-emphasis, #1f6feb) !important;
+                border-color: var(--color-accent-emphasis, #1f6feb) !important;
+            }
+            .gh-platform-tag.gh-tag-mac {
+                color: var(--color-done-emphasis, #8957e5) !important;
+                border-color: var(--color-done-emphasis, #8957e5) !important;
+            }
+            .gh-platform-tag.gh-tag-mobile {
+                color: #e3b341 !important;
+                border-color: #e3b341 !important;
+            }
+            .gh-platform-tag.gh-tag-linux-rpm {
+                color: var(--color-danger-emphasis, #f85149) !important;
+                border-color: var(--color-danger-emphasis, #f85149) !important;
+            }
+            .gh-platform-tag.gh-tag-linux-deb {
+                color: var(--color-severe-emphasis, #db6d28) !important;
+                border-color: var(--color-severe-emphasis, #db6d28) !important;
+            }
+            .gh-platform-tag.gh-tag-linux-arch {
+                color: var(--color-sponsors-emphasis, #bf4b8a) !important;
+                border-color: var(--color-sponsors-emphasis, #bf4b8a) !important;
+            }
+            .gh-platform-tag.gh-tag-linux-appimage {
+                color: #20c997 !important;
+                border-color: #20c997 !important;
+            }
+            .gh-platform-tag.gh-tag-linux-flatpak {
+                color: #0abda0 !important;
+                border-color: #0abda0 !important;
+            }
+            .gh-platform-tag.gh-tag-linux-other {
+                color: var(--color-attention-emphasis, #9e6a03) !important;
+                border-color: var(--color-attention-emphasis, #9e6a03) !important;
+            }
 
       /* 第三方代理按钮的下拉菜单样式 */
       .gh-proxy-dropdown { position: relative; display: flex; align-items: center; }
@@ -253,6 +303,19 @@
         return 'gh-group-other';
     }
 
+    function getTagClass(groupId) {
+        if (groupId === 'windows') return 'gh-tag-win';
+        if (groupId === 'mac') return 'gh-tag-mac';
+        if (groupId === 'linux-deb') return 'gh-tag-linux-deb';
+        if (groupId === 'linux-rpm') return 'gh-tag-linux-rpm';
+        if (groupId === 'linux-arch') return 'gh-tag-linux-arch';
+        if (groupId === 'linux-appimage') return 'gh-tag-linux-appimage';
+        if (groupId === 'linux-flatpak') return 'gh-tag-linux-flatpak';
+        if (groupId.startsWith('linux')) return 'gh-tag-linux-other';
+        if (groupId === 'android' || groupId === 'ios') return 'gh-tag-mobile';
+        return '';
+    }
+
     function calculateMatchScore(fileName, currentOS, groupId) {
         let groupScore = 0;
         let innerScore = 0;
@@ -418,7 +481,8 @@
 
             if (row._groupInfo.showTag) {
                 const tag = document.createElement('span');
-                tag.className = `Label ${row._groupInfo.labelClass} gh-platform-tag mr-2`;
+                const tagClass = getTagClass(row._groupInfo.id);
+                tag.className = `Label gh-platform-tag ${tagClass} mr-2`;
                 tag.textContent = row._groupInfo.name;
                 metaContainer.appendChild(tag);
             }
