@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         GitHub Release 增强显示
 // @namespace    http://tampermonkey.net/
-// @version      2.7.7
-// @description  github release 所有文件下载量显示；文件安装包分组、添加平台标签；根据用户当前系统排序，推荐最可能安装的文件；将相对时间替换为精确时间（兼容手机与PC端）
+// @version      2.8.3
+// @description  github release 所有文件下载量显示；文件安装包分组、添加平台标签；根据用户当前系统/架构排序，推荐最可能安装的文件；将相对时间替换为精确时间（兼容手机与PC端）；更新日志可手动折叠
 // @author       caolib
 // @match        https://github.com/*
 // @icon         https://github.githubassets.com/pinned-octocat.svg
@@ -21,7 +21,8 @@
     const FEATURES = {
         groupAndSort: { key: 'feat_groupSort', label: '文件分组排序', default: true },
         downloadBtn: { key: 'feat_dlBtn', label: '显示下载量按钮', default: true },
-        replaceTime: { key: 'feat_replaceTime', label: '替换相对时间', default: true },
+        replaceTime: { key: 'feat_replaceTime', label: '替换相对时间', default: false },
+        collapsibleNotes: { key: 'feat_collapsibleNotes', label: '可折叠更新日志', default: true },
     };
 
     function isEnabled(feature) {
@@ -159,8 +160,8 @@
                 flex-shrink: 0;
             }
 
-      /* OS 切换下拉框 */
-      .gh-os-select {
+      /* OS / 架构 切换下拉框 */
+      .gh-os-select, .gh-arch-select {
         appearance: auto;
         background-color: var(--button-default-bgColor-rest, var(--color-btn-bg, #21262d));
         border: 1px solid var(--button-default-borderColor-rest, var(--color-btn-border, rgba(240,246,252,0.1)));
@@ -173,7 +174,7 @@
         padding: 3px 8px;
         margin-left: 8px;
       }
-      .gh-os-select:hover {
+      .gh-os-select:hover, .gh-arch-select:hover {
         background-color: var(--button-default-bgColor-hover, var(--color-btn-hover-bg, #30363d));
         border-color: var(--button-default-borderColor-hover, var(--color-btn-hover-border, rgba(240,246,252,0.3)));
       }
@@ -188,11 +189,96 @@
         color: var(--fgColor-default, var(--color-fg-default, #e6edf3));
       }
 
+      /* 组内校验/增量文件折叠区:wrapper 承载分组背景与左线,内部行不再重复绘制 */
+      .gh-group-aux-wrapper { padding-left: 0 !important; }
+      .gh-group-aux-wrapper > li {
+        border-left: none !important;
+        background-color: transparent !important;
+      }
+      .gh-group-aux-wrapper > summary {
+        cursor: pointer; padding: 6px 16px; font-size: 12px;
+        color: var(--fgColor-muted, var(--color-fg-muted, #8b949e));
+      }
+      .gh-group-aux-wrapper > summary:hover {
+        color: var(--fgColor-default, var(--color-fg-default, #e6edf3));
+      }
+
       /* 移动端适配样式 */
       .gh-meta-container { flex-wrap: wrap; gap: 4px; }
       @media (max-width: 768px) {
         .gh-meta-container { margin-top: 4px; }
       }
+
+      /* 更新日志手动折叠(默认展开):低调的标题行,非按钮外观 */
+      .markdown-body.gh-notes-collapsed { display: none !important; }
+      .gh-notes-toggle {
+        appearance: none; background: none; border: none; padding: 0;
+        margin: 0 0 8px;
+        display: inline-flex; align-items: center; gap: 6px;
+        cursor: pointer; user-select: none;
+        color: var(--fgColor-muted, var(--color-fg-muted, #8b949e));
+        font-size: 14px; font-weight: 600;
+      }
+      .gh-notes-toggle:hover { color: var(--fgColor-default, var(--color-fg-default, #e6edf3)); }
+      .gh-notes-chevron {
+        display: inline-block; width: 0; height: 0;
+        border-left: 4px solid transparent;
+        border-right: 4px solid transparent;
+        border-top: 6px solid currentColor;
+        transition: transform 0.12s ease;
+        transform-origin: 50% 40%;
+      }
+      .gh-notes-toggle.is-collapsed .gh-notes-chevron { transform: rotate(-90deg); }
+
+      /* 架构说明按钮 */
+      .gh-arch-help-btn {
+        appearance: none;
+        background-color: var(--button-default-bgColor-rest, var(--color-btn-bg, #21262d));
+        border: 1px solid var(--button-default-borderColor-rest, var(--color-btn-border, rgba(240,246,252,0.1)));
+        border-radius: 6px;
+        color: var(--button-default-fgColor-rest, var(--color-btn-text, #c9d1d9));
+        cursor: pointer;
+        font-size: 12px; font-weight: 600;
+        width: 22px; height: 22px; line-height: 1;
+        padding: 0; margin-left: 4px;
+        display: inline-flex; align-items: center; justify-content: center;
+        flex-shrink: 0;
+      }
+      .gh-arch-help-btn:hover {
+        background-color: var(--button-default-bgColor-hover, var(--color-btn-hover-bg, #30363d));
+        border-color: var(--button-default-borderColor-hover, var(--color-btn-hover-border, rgba(240,246,252,0.3)));
+      }
+
+      /* 架构说明弹窗 */
+      .gh-arch-help-overlay {
+        position: fixed; inset: 0; z-index: 10000;
+        background-color: rgba(1,4,9,0.6);
+        display: flex; align-items: center; justify-content: center;
+      }
+      .gh-arch-help-modal {
+        background-color: var(--color-canvas-default, #0d1117);
+        border: 1px solid var(--color-border-default, #30363d);
+        border-radius: 8px;
+        padding: 16px 20px;
+        max-width: 92vw; max-height: 85vh; overflow: auto;
+        position: relative;
+        box-shadow: var(--shadow-floating-large, 0 8px 24px rgba(0,0,0,0.4));
+      }
+      .gh-arch-help-modal h3 { margin: 0 0 8px; font-size: 16px; }
+      .gh-arch-help-tip { margin: 0 0 12px; font-size: 12px; color: var(--color-fg-muted, #8b949e); }
+      .gh-arch-help-modal table { border-collapse: collapse; width: 100%; font-size: 13px; }
+      .gh-arch-help-modal th, .gh-arch-help-modal td {
+        border: 1px solid var(--color-border-default, #30363d);
+        padding: 6px 10px; text-align: left; vertical-align: top;
+      }
+      .gh-arch-help-modal th { background-color: var(--color-canvas-subtle, #161b22); font-weight: 600; }
+      .gh-arch-help-close {
+        position: absolute; top: 6px; right: 10px;
+        background: none; border: none;
+        color: var(--color-fg-muted, #8b949e);
+        cursor: pointer; font-size: 22px; line-height: 1; padding: 0;
+      }
+      .gh-arch-help-close:hover { color: var(--color-fg-default, #e6edf3); }
     `;
         document.head.appendChild(style);
     }
@@ -242,10 +328,23 @@
     }
 
     let _selectedOS = null;
+    let _selectedArch = null;
     const _processedDetails = [];
 
     function getActiveOS() {
         return _selectedOS || getCurrentOS();
+    }
+
+    function getActiveArch() {
+        return _selectedArch || getCurrentArch();
+    }
+
+    // 强制重新排序所有已处理的 details
+    function reprocessAllDetails() {
+        _processedDetails.forEach(d => {
+            d.dataset.validRowCount = '0';
+            if (d.open) formatAndSortUI(d, true);
+        });
     }
 
     const OS_OPTIONS = [
@@ -255,6 +354,102 @@
         { value: 'android', label: 'Android' },
         { value: 'ios', label: 'iOS' },
     ];
+
+    const ARCH_OPTIONS = [
+        { value: 'x86_64', label: 'x64' },
+        { value: 'arm64', label: 'arm64' },
+        { value: 'x86', label: 'x86' },
+        { value: 'arm32', label: 'arm32' },
+    ];
+
+    function getCurrentArch() {
+        // 优先使用 User-Agent Client Hints
+        if (navigator.userAgentData && navigator.userAgentData.arch) {
+            const arch = String(navigator.userAgentData.arch).toLowerCase();
+            if (arch.includes('arm64') || arch.includes('aarch64')) return 'arm64';
+            if (arch === 'arm' || arch.includes('arm32') || arch.includes('armv7')) return 'arm32';
+            if (arch.includes('x86_64') || arch === 'amd64' || arch === 'x64') return 'x86_64';
+            if (arch.includes('x86') || arch.includes('i386') || arch.includes('i686')) return 'x86';
+        }
+        const platform = String(navigator.platform || '').toLowerCase();
+        const ua = navigator.userAgent.toLowerCase();
+        if (platform.includes('aarch64') || platform.includes('arm64') || ua.includes('aarch64') || ua.includes('arm64')) return 'arm64';
+        if (platform.includes('win64') || platform.includes('x64') || platform.includes('x86_64') || ua.includes('win64') || ua.includes('x86_64') || ua.includes('wow64')) return 'x86_64';
+        if (platform.includes('arm') || ua.includes('armv7') || ua.includes('armhf')) return 'arm32';
+        if (platform.includes('i386') || platform.includes('i686') || ua.includes('i386') || ua.includes('i686')) return 'x86';
+        // 平台默认兜底
+        const os = getCurrentOS();
+        if (os === 'mac') return 'arm64'; // Apple Silicon 已成主流
+        return 'x86_64';
+    }
+
+    // 从文件名解析架构,返回规范化架构 key。
+    // 判断顺序很关键:子串存在包含关系(arm64 含 arm、x86_64 含 x86、armv8 含 arm 等),必须先 64 位后 32 位。
+    function parseFileArch(fileName) {
+        const name = fileName.toLowerCase();
+        // ARM64:aarch64 / arm64 / armv8 / arm64-v8a(Android ABI)——必须先于 ARM32
+        if (name.includes('aarch64') || name.includes('arm64') || name.includes('armv8')) return 'arm64';
+        // x86_64:x86_64 / x64 / amd64——必须先于 x86
+        if (name.includes('x86_64') || name.includes('x64') || name.includes('amd64')) return 'x86_64';
+        // RISC-V 64
+        if (name.includes('riscv64') || name.includes('riscv')) return 'riscv64';
+        // ARM32:armv7 / armeabi-v7a / armhf / armv6 / armel / armeabi / 单独的 arm
+        if (name.includes('armv7') || name.includes('armeabi-v7a') || name.includes('armhf') || name.includes('armv6') || name.includes('armel') || name.includes('armeabi') || /\barm\b/.test(name)) return 'arm32';
+        // x86(32 位):i386 / i686 / ia32 / x86 / 32-bit / 32bit
+        if (name.includes('i386') || name.includes('i686') || name.includes('ia32') || name.includes('x86') || name.includes('32-bit') || name.includes('32bit')) return 'x86';
+        // 冷门架构:仅识别归类,自然排到末尾
+        if (name.includes('mips64') || name.includes('mipsel') || name.includes('mips')) return 'mips';
+        if (name.includes('ppc64') || name.includes('ppc')) return 'ppc';
+        // macOS Universal(x86_64 + arm64 合一)
+        if (name.includes('universal')) return 'universal';
+        return null;
+    }
+
+    // --- 架构说明弹窗(全局复用一个,点背景或 × 关闭) ---
+    let _archHelpModal = null;
+    function showArchHelp() {
+        if (!_archHelpModal) {
+            _archHelpModal = createArchHelpModal();
+            document.body.appendChild(_archHelpModal);
+        }
+        _archHelpModal.style.display = 'flex';
+    }
+    function createArchHelpModal() {
+        const overlay = document.createElement('div');
+        overlay.className = 'gh-arch-help-overlay';
+        overlay.innerHTML = `
+            <div class="gh-arch-help-modal">
+                <button type="button" class="gh-arch-help-close" aria-label="关闭">×</button>
+                <h3>设备架构说明</h3>
+                <p class="gh-arch-help-tip">架构指 CPU 指令集架构(ISA),决定软件能否运行,不同架构一般不兼容。</p>
+                <table>
+                    <thead><tr><th>架构</th><th>别名</th><th>常见设备</th><th>说明</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>x86</strong></td><td>i386、i686、32 位</td><td>老电脑、旧工控机</td><td>Intel/AMD 32 位,已逐渐淘汰</td></tr>
+                        <tr><td><strong>x86_64</strong></td><td>amd64、x64</td><td>大多数 Windows/Linux PC</td><td>桌面与服务器最常见</td></tr>
+                        <tr><td><strong>ARM32</strong></td><td>armv7、armeabi-v7a</td><td>老安卓手机、树莓派早期</td><td>32 位 ARM</td></tr>
+                        <tr><td><strong>ARM64</strong></td><td>aarch64、arm64</td><td>新安卓手机、Apple Silicon、树莓派 3/4/5</td><td>移动设备主流</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        `;
+        const close = () => { overlay.style.display = 'none'; };
+        overlay.querySelector('.gh-arch-help-close').addEventListener('click', close);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+        overlay.style.display = 'none';
+        return overlay;
+    }
+
+    // 判断是否为校验/增量更新等衍生文件(如 .sha256sum、.bsdiff),这类文件在本组内折叠收起
+    function isAuxiliaryFile(fileName) {
+        const name = fileName.toLowerCase();
+        if (/\.sha\d*sum$/.test(name)) return true;       // .sha256sum / .sha512sum / .shasum
+        if (/\.md5sum$/.test(name)) return true;
+        if (/\.checksums?$/.test(name)) return true;
+        if (/\.sums$/.test(name)) return true;
+        if (/\.(bsdiff|delta|patch)$/.test(name)) return true;   // 增量更新补丁
+        return false;
+    }
 
     function parseFileGroup(fileName) {
         const name = fileName.toLowerCase();
@@ -316,7 +511,7 @@
         return '';
     }
 
-    function calculateMatchScore(fileName, currentOS, groupId) {
+    function calculateMatchScore(fileName, currentOS, groupId, currentArch) {
         let groupScore = 0;
         let innerScore = 0;
         const name = fileName.toLowerCase();
@@ -343,10 +538,21 @@
             else if (groupId === 'source') groupScore = -2000;
         }
 
-        if (name.includes('x64') || name.includes('amd64') || name.includes('x86_64')) innerScore += 50;
-        if (name.includes('arm64-v8a') || name.includes('v8a')) innerScore += 30;
-        if (name.includes('arm64') || name.includes('aarch64')) innerScore += 20;
-        if (name.includes('universal')) innerScore += 15;
+        // 架构匹配：用户选择的架构权重最高（远高于下面的兜底默认偏好，确保用户选择优先生效）
+        const fileArch = parseFileArch(fileName);
+        if (fileArch === currentArch) {
+            innerScore += 500;
+        } else if (fileArch === 'universal') {
+            innerScore += 60;
+        } else if (fileArch === 'x86_64') {
+            innerScore += 50;
+        } else if (fileArch === 'arm64') {
+            innerScore += 20;
+        } else if (fileArch === 'x86') {
+            innerScore += 10;
+        } else if (fileArch === 'arm32') {
+            innerScore += 5;
+        }
 
         if (name.endsWith('.exe') || name.endsWith('.dmg') || name.endsWith('.appimage') || name.endsWith('.flatpak') || name.endsWith('.apk')) innerScore += 10;
         if (name.endsWith('.zip') || name.endsWith('.7z')) innerScore += 5;
@@ -409,8 +615,8 @@
     // --- 核心解耦逻辑 ---
 
     function formatAndSortUI(detailsElem, force) {
-        // 【核心修复1】移除了强依赖的 li.Box-row，改为筛选包含下载链接的通用 li 标签
-        const validRows = Array.from(detailsElem.querySelectorAll('li')).filter(r => r.querySelector('a[href*="/releases/download/"], a[href*="/archive/"]'));
+        // 【核心修复1】移除了强依赖的 li.Box-row，改为筛选包含下载链接的通用 li 标签（含 attestation）
+        const validRows = Array.from(detailsElem.querySelectorAll('li')).filter(r => r.querySelector('a[href*="/releases/download/"], a[href*="/archive/"], a[href*="/attestations/"]'));
         if (validRows.length === 0) return;
 
         const prevCount = parseInt(detailsElem.dataset.validRowCount || '0');
@@ -419,17 +625,20 @@
 
         const parentList = validRows[0].parentNode;
         const os = getActiveOS();
+        const arch = getActiveArch();
 
         validRows.forEach(row => {
-            const nameLink = row.querySelector('a[href*="/releases/download/"], a[href*="/archive/"]');
+            const nameLink = row.querySelector('a[href*="/releases/download/"], a[href*="/archive/"], a[href*="/attestations/"]');
             let score = -10000;
             let groupInfo = { id: 'other', showTag: false };
 
             if (nameLink) {
                 const fileName = getFileNameFromLink(nameLink);
                 const href = nameLink.getAttribute('href') || '';
-                groupInfo = href.includes('/archive/') ? { id: 'source', showTag: false } : parseFileGroup(fileName);
-                score = calculateMatchScore(fileName, os, groupInfo.id);
+                groupInfo = href.includes('/archive/') ? { id: 'source', showTag: false }
+                    : href.includes('/attestations/') ? { id: 'meta', showTag: false }
+                    : parseFileGroup(fileName);
+                score = calculateMatchScore(fileName, os, groupInfo.id, arch);
             }
             row.dataset.matchScore = score;
             row._groupInfo = groupInfo;
@@ -437,9 +646,8 @@
         });
 
         validRows.forEach(row => row.remove());
-        // 清除旧的签名文件折叠区
-        const oldMetaWrapper = parentList.querySelector('.gh-meta-files-wrapper');
-        if (oldMetaWrapper) oldMetaWrapper.remove();
+        // 清除旧的折叠区(全局签名/校验 + 各组内校验折叠)
+        parentList.querySelectorAll('.gh-meta-files-wrapper, .gh-group-aux-wrapper').forEach(w => w.remove());
 
         validRows.sort((a, b) => parseInt(b.dataset.matchScore) - parseInt(a.dataset.matchScore));
 
@@ -488,10 +696,50 @@
             }
         };
 
-        normalRows.forEach((row) => {
-            parentList.appendChild(row);
-            applyRowStyle(row);
+        // 按 groupId 分段渲染(normalRows 已按 score 降序、同组相邻);
+        // 每段末尾把校验和文件折叠收起,使主体安装包优先展示
+        let currentGroupId = null;
+        let currentSegment = [];
+
+        const flushSegment = () => {
+            if (currentSegment.length === 0) return;
+            const groupId = currentSegment[0]._groupInfo.id;
+
+            const mainRows = [];
+            const auxRows = [];
+            currentSegment.forEach(row => {
+                const name = row._nameLink ? getFileNameFromLink(row._nameLink) : '';
+                (isAuxiliaryFile(name) ? auxRows : mainRows).push(row);
+            });
+
+            mainRows.forEach(row => {
+                parentList.appendChild(row);
+                applyRowStyle(row);
+            });
+
+            if (auxRows.length > 0) {
+                const wrapper = document.createElement('details');
+                wrapper.className = `gh-group-aux-wrapper ${getGroupClass(groupId)}`;
+                const summary = document.createElement('summary');
+                summary.textContent = `校验/增量文件 (${auxRows.length})`;
+                wrapper.appendChild(summary);
+                auxRows.forEach(row => {
+                    wrapper.appendChild(row);
+                    applyRowStyle(row);
+                });
+                parentList.appendChild(wrapper);
+            }
+
+            currentSegment = [];
+        };
+
+        normalRows.forEach(row => {
+            const gid = row._groupInfo.id;
+            if (gid !== currentGroupId) flushSegment();
+            currentGroupId = gid;
+            currentSegment.push(row);
         });
+        flushSegment();
 
         if (metaRows.length > 0) {
             const wrapper = document.createElement('details');
@@ -510,6 +758,7 @@
         const showAllBtn = Array.from(parentList.children).find(child =>
             !child.querySelector('a[href*="/releases/download/"], a[href*="/archive/"]') &&
             !child.classList.contains('gh-meta-files-wrapper') &&
+            !child.classList.contains('gh-group-aux-wrapper') &&
             /show all/i.test(child.textContent)
         );
         if (showAllBtn) parentList.appendChild(showAllBtn);
@@ -669,6 +918,23 @@
         });
     }
 
+    // --- 更新日志手动折叠(默认展开) ---
+    function processReleaseNotes() {
+        document.querySelectorAll('.markdown-body.tmp-my-3:not(.gh-notes-processed)').forEach(el => {
+            el.classList.add('gh-notes-processed');
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'gh-notes-toggle';
+            btn.innerHTML = `<span class="gh-notes-chevron"></span>更新日志`;
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                const collapsed = el.classList.toggle('gh-notes-collapsed');
+                btn.classList.toggle('is-collapsed', collapsed);
+            });
+            el.parentNode.insertBefore(btn, el);
+        });
+    }
+
     function processReleaseBox(details, repoInfo, tagName) {
         if (details.dataset.boxProcessed === "true") return;
         details.dataset.boxProcessed = "true";
@@ -757,13 +1023,53 @@
                 // 同步所有下拉框的选中状态
                 document.querySelectorAll('.gh-os-select').forEach(s => { s.value = _selectedOS; });
                 // 强制重新排序所有已处理的 details
-                _processedDetails.forEach(d => {
-                    d.dataset.validRowCount = '0';
-                    if (d.open) formatAndSortUI(d, true);
-                });
+                reprocessAllDetails();
             });
 
             titleSpan.appendChild(select);
+        }
+
+        // 架构切换下拉框
+        if (isEnabled('groupAndSort') && titleSpan && !summary.dataset.archSelectInjected) {
+            summary.dataset.archSelectInjected = 'true';
+
+            const archSelect = document.createElement('select');
+            archSelect.className = 'gh-arch-select';
+            const detectedArch = getCurrentArch();
+            ARCH_OPTIONS.forEach(opt => {
+                const option = document.createElement('option');
+                option.value = opt.value;
+                option.textContent = opt.label;
+                if (opt.value === (_selectedArch || detectedArch)) option.selected = true;
+                archSelect.appendChild(option);
+            });
+
+            // 阻止点击下拉框时折叠/展开 details
+            archSelect.addEventListener('click', (e) => e.stopPropagation());
+            archSelect.addEventListener('mousedown', (e) => e.stopPropagation());
+
+            archSelect.addEventListener('change', () => {
+                _selectedArch = archSelect.value;
+                // 同步所有架构下拉框的选中状态
+                document.querySelectorAll('.gh-arch-select').forEach(s => { s.value = _selectedArch; });
+                reprocessAllDetails();
+            });
+
+            titleSpan.appendChild(archSelect);
+
+            // 架构说明按钮
+            const helpBtn = document.createElement('button');
+            helpBtn.type = 'button';
+            helpBtn.className = 'gh-arch-help-btn';
+            helpBtn.textContent = '?';
+            helpBtn.title = '架构说明';
+            helpBtn.addEventListener('mousedown', (e) => e.stopPropagation());
+            helpBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                showArchHelp();
+            });
+            titleSpan.appendChild(helpBtn);
         }
 
         const observer = new MutationObserver(() => {
@@ -812,6 +1118,10 @@
 
         const repoInfo = getRepoInfo();
         if (!repoInfo) return;
+
+        if (isEnabled('collapsibleNotes')) {
+            processReleaseNotes();
+        }
 
         const detailsElements = document.querySelectorAll('details');
         detailsElements.forEach(details => {
