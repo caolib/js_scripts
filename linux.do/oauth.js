@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Linux.do 增强
 // @namespace    http://tampermonkey.net/
-// @version      0.6.0
-// @description  在 connect.linux.do 页面检测到「允许」按钮时自动点击；在 linux.do 页面自动点击外链跳转弹窗、支持正则屏蔽词过滤帖子、实时预览；支持功能开关
+// @version      0.8.0
+// @description  在 connect.linux.do 页面检测到「允许」按钮时自动点击；在 linux.do 页面自动点击外链跳转弹窗、支持正则屏蔽词过滤帖子（标题/分类独立规则）、实时预览；支持功能开关
 // @author       caolib
 // @match        https://connect.linux.do/*
 // @match        https://linux.do/*
@@ -49,7 +49,9 @@
     // ========== 屏蔽词面板（仅 linux.do） ==========
     const WORDS_KEY = 'block_words_list';
     const BW_ENABLED_KEY = 'block_words_enabled';
-    let bwState = { btn: null, panel: null, input: null, list: null, stat: null, pauseToggle: null };
+    const CAT_WORDS_KEY = 'block_cat_words_list';
+    const CAT_ENABLED_KEY = 'block_cat_words_enabled';
+    let bwState = { trigger: null, panel: null, input: null, list: null, catList: null, stat: null, pauseToggle: null, catPauseToggle: null, activeTab: 'title' };
 
     function getBlockWords() {
         if (typeof GM_getValue === 'undefined') return [];
@@ -65,6 +67,23 @@
     }
     function setBlockEnabled(v) {
         if (typeof GM_setValue !== 'undefined') GM_setValue(BW_ENABLED_KEY, v);
+    }
+
+    // --- 分类屏蔽词 ---
+    function getCatBlockWords() {
+        if (typeof GM_getValue === 'undefined') return [];
+        const v = GM_getValue(CAT_WORDS_KEY, []);
+        return Array.isArray(v) ? v : [];
+    }
+    function setCatBlockWords(words) {
+        if (typeof GM_setValue !== 'undefined') GM_setValue(CAT_WORDS_KEY, words);
+    }
+    function isCatBlockEnabled() {
+        if (typeof GM_getValue === 'undefined') return true;
+        return GM_getValue(CAT_ENABLED_KEY, true);
+    }
+    function setCatBlockEnabled(v) {
+        if (typeof GM_setValue !== 'undefined') GM_setValue(CAT_ENABLED_KEY, v);
     }
 
     // 支持 /pattern/flags 写法；非法正则返回 null
@@ -83,220 +102,60 @@
         }
     }
 
-    // --- 悬浮按钮位置持久化 + 拖拽 ---
-    const BW_BTN_POS_KEY = 'bw_btn_pos';
-    const EDGE_THRESHOLD = 80; // 靠边阈值（像素）
-    const STUB = 26; // 隐藏时保留的可见尺寸（像素），需小于按钮最小边
-    const HIDE_DIRS = ['left', 'right', 'top', 'bottom'];
-    function clearHideClasses(btn) {
-        HIDE_DIRS.forEach(d => btn.classList.remove(`ld-bw-hide-${d}`));
-    }
+    // --- 顶部栏徽章入口 ---
+    const HEADER_TRIGGER_ID = 'ld-bw-trigger';
 
-    function getBtnPos() {
-        if (typeof GM_getValue === 'undefined') return null;
-        const v = GM_getValue(BW_BTN_POS_KEY, null);
-        return v && typeof v.x === 'number' && typeof v.y === 'number' ? v : null;
-    }
-    function setBtnPos(x, y) {
-        if (typeof GM_setValue !== 'undefined') GM_setValue(BW_BTN_POS_KEY, { x, y });
-    }
-    // 把按钮限制在视口内
-    function clampBtnPos(btn, x, y) {
-        const maxX = Math.max(0, document.documentElement.clientWidth - btn.offsetWidth);
-        const maxY = Math.max(0, document.documentElement.clientHeight - btn.offsetHeight);
-        return {
-            x: Math.max(0, Math.min(x, maxX)),
-            y: Math.max(0, Math.min(y, maxY)),
-        };
-    }
-    function applyBtnPos(btn, x, y) {
-        const p = clampBtnPos(btn, x, y);
-        btn.style.right = 'auto';
-        btn.style.bottom = 'auto';
-        btn.style.left = p.x + 'px';
-        btn.style.top = p.y + 'px';
-        checkAndAutoHide(btn);
-        return p;
-    }
-
-    // 检测是否靠边并应用自动隐藏
-    function checkAndAutoHide(btn) {
-        if (!btn) return;
-        const rect = btn.getBoundingClientRect();
-        const vw = document.documentElement.clientWidth;
-        const vh = document.documentElement.clientHeight;
-        const isNearLeft = rect.left < EDGE_THRESHOLD;
-        const isNearRight = vw - rect.right < EDGE_THRESHOLD;
-        const isNearTop = rect.top < EDGE_THRESHOLD;
-        const isNearBottom = vh - rect.bottom < EDGE_THRESHOLD;
-
-        // 优先横向隐藏，其次纵向
-        if (isNearLeft || isNearRight) {
-            btn.dataset.autoHide = '1';
-            btn.dataset.hideDir = isNearLeft ? 'left' : 'right';
-        } else if (isNearTop || isNearBottom) {
-            btn.dataset.autoHide = '1';
-            btn.dataset.hideDir = isNearTop ? 'top' : 'bottom';
-        } else {
-            btn.dataset.autoHide = '0';
-            btn.dataset.hideDir = '';
+    // 把徽章插入顶部栏右上角图标区（.d-header-icons），作为该列表第一项；幂等
+    function injectHeaderTrigger(trigger) {
+        if (!trigger) return false;
+        if (trigger.parentElement) return true; // 已在 DOM 里
+        const icons = document.querySelector('.d-header .d-header-icons');
+        if (!icons) return false; // 头部未就绪
+        // 包一层 <li>，与搜索/头像等图标项结构一致
+        let li = trigger.closest('li');
+        if (!li) {
+            li = document.createElement('li');
+            li.className = 'header-dropdown-toggle';
+            li.appendChild(trigger);
         }
-
-        // 如果面板未打开且不在悬停状态，应用隐藏
-        if (!isPanelOpen() && !btn.matches(':hover')) {
-            applyAutoHide(btn);
-        }
+        if (li.parentElement === icons) return true;
+        icons.insertBefore(li, icons.firstChild);
+        return true;
     }
 
-    // 应用自动隐藏效果
-    function applyAutoHide(btn) {
-        if (!btn || btn.dataset.autoHide !== '1') {
-            btn.style.transform = '';
-            clearHideClasses(btn);
-            return;
-        }
-        const dir = btn.dataset.hideDir;
-        clearHideClasses(btn);
-        if (dir === 'left') {
-            btn.classList.add('ld-bw-hide-left');
-            btn.style.transform = `translateX(-${Math.max(0, btn.offsetWidth - STUB)}px)`;
-        } else if (dir === 'right') {
-            btn.classList.add('ld-bw-hide-right');
-            btn.style.transform = `translateX(${Math.max(0, btn.offsetWidth - STUB)}px)`;
-        } else if (dir === 'top') {
-            btn.classList.add('ld-bw-hide-top');
-            btn.style.transform = `translateY(-${Math.max(0, btn.offsetHeight - STUB)}px)`;
-        } else if (dir === 'bottom') {
-            btn.classList.add('ld-bw-hide-bottom');
-            btn.style.transform = `translateY(${Math.max(0, btn.offsetHeight - STUB)}px)`;
-        } else {
-            btn.style.transform = '';
-        }
-    }
-
-    // 展开按钮：清 transform 和隐藏类，恢复正常「🚫 N」顺序
-    function expandButton(btn) {
-        if (!btn) return;
-        btn.style.transform = '';
-        clearHideClasses(btn);
-    }
-
-    // 拖拽：移动超过阈值(4px)算拖拽，不触发点击；松手保存位置
-    function makeDraggable(btn, onClick) {
-        let dragging = false, moved = false, startX = 0, startY = 0, offX = 0, offY = 0;
-
-        btn.addEventListener('mousedown', (e) => {
-            dragging = true;
-            moved = false;
-            startX = e.clientX;
-            startY = e.clientY;
-            const rect = btn.getBoundingClientRect();
-            offX = e.clientX - rect.left;
-            offY = e.clientY - rect.top;
-            btn.style.cursor = 'grabbing';
-            expandButton(btn); // 拖拽时展开
-            e.preventDefault();
-        });
-
-        document.addEventListener('mousemove', (e) => {
-            if (!dragging) return;
-            if (Math.abs(e.clientX - startX) > 4 || Math.abs(e.clientY - startY) > 4) moved = true;
-            if (!moved) return;
-            applyBtnPos(btn, e.clientX - offX, e.clientY - offY);
-            if (isPanelOpen()) positionPanel();
-        });
-
-        document.addEventListener('mouseup', () => {
-            if (!dragging) return;
-            dragging = false;
-            btn.style.cursor = 'grab';
-            if (moved) {
-                // 松手时保存最终位置并检查自动隐藏
-                const p = clampBtnPos(btn, parseFloat(btn.style.left) || 0, parseFloat(btn.style.top) || 0);
-                setBtnPos(p.x, p.y);
-                checkAndAutoHide(btn);
-            }
-        });
-
-        // click 在 mouseup 之后触发：若是拖拽收尾则吞掉本次点击
-        btn.addEventListener('click', () => {
-            if (moved) { moved = false; return; }
-            onClick();
-        });
-
-        // 鼠标进入时展开按钮
-        btn.addEventListener('mouseenter', () => {
-            expandButton(btn);
-        });
-
-        // 鼠标离开时，如果面板未打开则自动隐藏
-        btn.addEventListener('mouseleave', () => {
-            if (!isPanelOpen()) {
-                applyAutoHide(btn);
-            }
-        });
-
-        // 窗口缩放时把按钮拉回视口
-        window.addEventListener('resize', () => {
-            if (btn.style.left) applyBtnPos(btn, parseFloat(btn.style.left), parseFloat(btn.style.top));
-            else checkAndAutoHide(btn); // 默认右下角定位，无需重算坐标，仅重判隐藏
-            if (isPanelOpen()) positionPanel();
-        });
-    }
-
-    // 面板跟随按钮定位：优先弹在按钮上方，空间不足转下方，横向夹在视口内
+    // 面板定位：徽章正下方下拉；溢出右边界则右对齐，再不行夹在视口内
     function positionPanel() {
-        const btn = bwState.btn, panel = bwState.panel;
-        if (!btn || !panel) return;
-        const gap = 8;
-        const r = btn.getBoundingClientRect();
-        const pw = panel.offsetWidth || 300;
-        const ph = panel.offsetHeight || 200;
+        const panel = bwState.panel;
+        if (!panel) return;
+        const trigger = bwState.trigger;
+        const gap = 6;
+        const header = document.querySelector('.d-header');
+        const headerH = header ? header.offsetHeight : 60;
         const vw = document.documentElement.clientWidth;
-        const vh = document.documentElement.clientHeight;
-
-        // 横向：默认与按钮左对齐，溢出右侧则右对齐到视口边，再不行夹中
-        let x = r.left;
-        if (x + pw > vw - gap) x = r.right - pw;
-        if (x < gap) x = gap;
-        x = Math.min(x, Math.max(gap, vw - pw - gap));
-
-        // 纵向：按钮上方优先，不够再放下方，都不够就贴顶
-        let y;
-        if (r.top - gap - ph >= gap) {
-            y = r.top - gap - ph;            // 上方
-        } else if (r.bottom + gap + ph <= vh - gap) {
-            y = r.bottom + gap;              // 下方
+        const pw = panel.offsetWidth || 300;
+        let x;
+        if (trigger && trigger.isConnected) {
+            const r = trigger.getBoundingClientRect();
+            x = r.right - pw; // 默认面板右缘与徽章右缘对齐
         } else {
-            y = gap;                          // 贴顶
+            x = vw - pw - 16;
         }
-
-        panel.style.right = 'auto';
-        panel.style.bottom = 'auto';
+        x = Math.max(gap, Math.min(x, vw - pw - gap));
+        panel.style.top = headerH + 'px';
         panel.style.left = x + 'px';
-        panel.style.top = y + 'px';
     }
 
     function isPanelOpen() {
         return bwState.panel && bwState.panel.style.display === 'block';
     }
 
-    // 关闭面板：隐藏 + 重新收起按钮（若靠边）
+    // 关闭面板
     function closeBwPanel() {
-        const { panel, btn } = bwState;
-        if (!panel) return;
-        panel.style.display = 'none';
-        if (btn) applyAutoHide(btn);
+        if (!bwState.panel) return;
+        bwState.panel.style.display = 'none';
     }
 
-    // 取一行帖子的可匹配文本：标题 + 分类 + 标签
-    function getTopicText(tr) {
-        const title = tr.querySelector('.main-link a.title')?.textContent || '';
-        const cat = tr.querySelector('.badge-category__name')?.textContent || '';
-        const tags = Array.from(tr.querySelectorAll('.discourse-tag'))
-            .map(a => a.textContent || '').join(' ');
-        return `${title} ${cat} ${tags}`;
-    }
+    // 不再需要 getTopicText——标题与分类分别独立匹配
 
     let bwTimer = null;
     function scheduleApply() {
@@ -305,20 +164,40 @@
     }
 
     function applyBlockFilter() {
-        const enabled = isBlockEnabled();
-        const rawWords = enabled
+        // --- 标题屏蔽 ---
+        const titleEnabled = isBlockEnabled();
+        const titleRawWords = titleEnabled
             ? getBlockWords().map(w => w.trim()).filter(Boolean)
             : [];
-        const matchers = [];
-        if (enabled) {
-            rawWords.forEach(w => {
+        const titleMatchers = [];
+        if (titleEnabled) {
+            titleRawWords.forEach(w => {
                 const re = compileRegex(w);
-                if (re) matchers.push(re);
+                if (re) titleMatchers.push(re);
             });
         }
+
+        // --- 分类屏蔽 ---
+        const catEnabled = isCatBlockEnabled();
+        const catRawWords = catEnabled
+            ? getCatBlockWords().map(w => w.trim()).filter(Boolean)
+            : [];
+        const catMatchers = [];
+        if (catEnabled) {
+            catRawWords.forEach(w => {
+                const re = compileRegex(w);
+                if (re) catMatchers.push(re);
+            });
+        }
+
         document.querySelectorAll('tr.topic-list-item').forEach(tr => {
-            const full = getTopicText(tr);
-            const hit = matchers.some(re => re.test(full));
+            const title = tr.querySelector('.main-link a.title')?.textContent || '';
+            const cat = tr.querySelector('.badge-category__name')?.textContent || '';
+
+            const titleHit = titleMatchers.some(re => re.test(title));
+            const catHit = catMatchers.some(re => re.test(cat));
+            const hit = titleHit || catHit;
+
             if (hit) {
                 tr.style.display = 'none';
                 tr.dataset.blockedWords = '1';
@@ -331,11 +210,10 @@
     }
 
     function updateBwStat() {
-        if (!bwState.btn) return;
+        if (!bwState.trigger) return;
         const hidden = document.querySelectorAll('tr[data-blocked-words]').length;
-        const num = bwState.btn.querySelector('.bw-num');
+        const num = bwState.trigger.querySelector('.bw-num');
         if (num) num.textContent = String(hidden);
-        else bwState.btn.textContent = `🚫 ${hidden}`;
     }
 
     // --- 实时预览：用输入框草稿匹配示例句子，命中的显示为已屏蔽 ---
@@ -445,19 +323,18 @@
     function injectBwStyles() {
         if (document.getElementById('ld-bw-style')) return;
         const css = `
-            #ld-bw-btn { position: fixed; right: 16px; bottom: 16px; z-index: 100000;
-                background:#2b2b2b; color:#e8e8e8; border:1px solid #444; border-radius:999px;
-                padding:8px 14px; font-size:13px; cursor:grab; box-shadow:0 2px 8px rgba(0,0,0,.4);
-                user-select:none; transition: transform 0.3s ease;
-                display:flex; align-items:center; justify-content:center; gap:5px;
-                overflow:hidden; white-space:nowrap; min-width:30px; }
-            #ld-bw-btn:hover { background:#333; }
-            /* 隐藏时让数字落在保留的可见侧 */
-            #ld-bw-btn.ld-bw-hide-left { justify-content:flex-end; }
-            #ld-bw-btn.ld-bw-hide-right { flex-direction:row-reverse; justify-content:flex-start; }
+            #ld-bw-trigger { display:inline-flex; align-items:center; gap:4px;
+                padding:6px 10px; font-size:13px; line-height:1; cursor:pointer;
+                border:1px solid var(--primary-low,#444); border-radius:999px;
+                background:transparent; color:var(--primary,#e8e8e8); }
+            .header-dropdown-toggle #ld-bw-trigger { height:100%; }
+            .header-dropdown-toggle { display:flex; align-items:center; }
+            #ld-bw-trigger:hover { background:var(--primary-low,#333); }
+            #ld-bw-trigger .bw-num { font-variant-numeric:tabular-nums; min-width:10px; text-align:center; }
             #ld-bw-panel { position: fixed; z-index: 100001;
-                width: 300px; display: none; overflow: hidden;
-                background:#1e1e1e; color:#e8e8e8; border:1px solid #3a3a3a; border-radius:10px;
+                width: 340px; display: none; overflow: hidden;
+                background:#1e1e1e; color:#e8e8e8; border:1px solid #3a3a3a;
+                border-radius:0 0 10px 10px; border-top:none;
                 box-shadow:0 6px 24px rgba(0,0,0,.5); font-size:13px; }
             #ld-bw-panel .ld-bw-head { display:flex; align-items:center; gap:10px;
                 padding:10px 12px; border-bottom:1px solid #3a3a3a; font-weight:600; color:#e8e8e8; }
@@ -465,23 +342,26 @@
             #ld-bw-panel .ld-bw-pause-label { display:flex; align-items:center; gap:4px; cursor:pointer;
                 font-weight:400; font-size:12px; color:#bbb; }
             #ld-bw-panel .ld-bw-body { padding:10px 12px; }
-            #ld-bw-panel .ld-bw-add { display:flex; gap:6px; margin-bottom:8px; align-items:stretch; }
-            #ld-bw-panel .ld-bw-dot { flex:0 0 auto; padding:6px 9px; font-family:Consolas,monospace; font-size:12px;
-                background:#1f2d3a; color:#9cdcfe; border:1px solid #2a5a7a; }
-            #ld-bw-panel input[type=text] { flex:1; min-width:0; padding:6px 8px;
+            #ld-bw-panel .ld-bw-add { display:flex; gap:6px; margin-bottom:8px; align-items:center; }
+            #ld-bw-panel .ld-bw-add input[type=text],
+            #ld-bw-panel .ld-bw-add button { height:32px; box-sizing:border-box; line-height:1; }
+            #ld-bw-panel .ld-bw-add .ld-bw-dot { flex:0 0 auto; padding:0 9px; font-family:Consolas,monospace; font-size:12px;
+                background:#1f2d3a; color:#9cdcfe; border:1px solid #2a5a7a; border-radius:6px; }
+            #ld-bw-panel .ld-bw-add input[type=text] { flex:1; min-width:0; padding:0 8px;
                 border:1px solid #3a3a3a; border-radius:6px;
                 background:#2b2b2b; color:#e8e8e8; }
             #ld-bw-panel input[type=text]::placeholder { color:#888; }
             #ld-bw-panel .ld-bw-submit { background:#0088cc; color:#fff; border-color:#0088cc; }
             #ld-bw-panel button { cursor:pointer; border:1px solid #3a3a3a;
-                background:#2b2b2b; color:#e8e8e8; border-radius:6px; padding:6px 10px; }
-            #ld-bw-chips { display:flex; flex-wrap:wrap; gap:6px; }
-            #ld-bw-chips .chip { display:inline-flex; align-items:center; gap:4px; padding:3px 8px;
+                background:#2b2b2b; color:#e8e8e8; border-radius:6px; padding:0 10px;
+                height:32px; box-sizing:border-box; line-height:1; }
+            #ld-bw-chips, #ld-bw-cat-chips { display:flex; flex-wrap:wrap; gap:6px; }
+            #ld-bw-chips .chip, #ld-bw-cat-chips .chip { display:inline-flex; align-items:center; gap:4px; padding:3px 8px;
                 background:#3a3a3a; color:#e8e8e8; border-radius:999px; }
-            #ld-bw-chips .chip-close { cursor:pointer; opacity:.6; color:#e8e8e8; }
-            #ld-bw-chips .chip-close:hover { opacity:1; }
-            #ld-bw-chips .chip-label { cursor:pointer; }
-            #ld-bw-chips .chip-label:hover { color:#9cdcfe; }
+            #ld-bw-chips .chip-close, #ld-bw-cat-chips .chip-close { cursor:pointer; opacity:.6; color:#e8e8e8; }
+            #ld-bw-chips .chip-close:hover, #ld-bw-cat-chips .chip-close:hover { opacity:1; }
+            #ld-bw-chips .chip-label, #ld-bw-cat-chips .chip-label { cursor:pointer; }
+            #ld-bw-chips .chip-label:hover, #ld-bw-cat-chips .chip-label:hover { color:#9cdcfe; }
             #ld-bw-foot { display:flex; align-items:center; justify-content:space-between;
                 padding:8px 12px; border-top:1px solid #3a3a3a; font-size:12px; color:#bbb; }
             #ld-bw-panel .ld-bw-toggles { display:flex; gap:12px; }
@@ -498,16 +378,24 @@
             #ld-bw-panel .ld-bw-sample-del:hover { opacity:1; color:#f55; }
             #ld-bw-panel .ld-bw-sample.hit { color:#888; background:#3a1f1f; border-color:#6b2e2e; text-decoration:line-through; }
             #ld-bw-panel .ld-bw-sample.hit::before { content:'🚫 '; text-decoration:none; }
-            #ld-bw-panel .ld-bw-sample-add { display:flex; gap:6px; margin-top:6px; }
-            #ld-bw-panel .ld-bw-sample-add input { flex:1; min-width:0; padding:5px 8px; font-size:12px;
-                border:1px solid #3a3a3a; border-radius:6px; background:#262626; color:#e8e8e8; }
+            #ld-bw-panel .ld-bw-sample-add { display:flex; gap:6px; margin-top:6px; align-items:center; }
+            #ld-bw-panel .ld-bw-sample-add input { flex:1; min-width:0; padding:0 8px; font-size:12px;
+                border:1px solid #3a3a3a; border-radius:6px; background:#262626; color:#e8e8e8;
+                height:32px; box-sizing:border-box; line-height:1; }
             #ld-bw-panel .ld-bw-sample-add input::placeholder { color:#777; }
-            #ld-bw-panel .ld-bw-sample-add button { flex:0 0 auto; padding:5px 10px; font-size:13px; }
-            #ld-bw-panel .ld-bw-add .ld-bw-dot { flex:0 0 auto; padding:6px 9px; font-family:Consolas,monospace;
-                background:#1f2d3a; color:#9cdcfe; border-color:#2a4a5a; }
-            #ld-bw-panel .ld-bw-add .ld-bw-kw { flex:0 0 auto; padding:6px 8px; font-family:Consolas,monospace;
-                font-size:11px; background:#1f3a2d; color:#9cdc9c; border-color:#2a5a3a; }
+            #ld-bw-panel .ld-bw-sample-add button { flex:0 0 auto; padding:0 10px; font-size:13px;
+                height:32px; box-sizing:border-box; line-height:1; }
+            #ld-bw-panel .ld-bw-add .ld-bw-kw { flex:0 0 auto; padding:0 8px; font-family:Consolas,monospace;
+                font-size:11px; background:#1f3a2d; color:#9cdc9c; border-color:#2a5a3a; border-radius:6px; }
             #ld-bw-panel input[type=text].invalid { border-color:#c0392b; box-shadow:0 0 0 1px #c0392b inset; }
+            #ld-bw-panel .ld-bw-tabs { display:flex; gap:0; border-bottom:1px solid #3a3a3a; }
+            #ld-bw-panel .ld-bw-tab { flex:1; padding:8px 0; text-align:center; cursor:pointer;
+                background:transparent; color:#888; border:none; border-radius:0;
+                border-bottom:2px solid transparent; font-size:13px; font-weight:500; }
+            #ld-bw-panel .ld-bw-tab:hover { color:#ccc; }
+            #ld-bw-panel .ld-bw-tab.active { color:#e8e8e8; border-bottom-color:#0088cc; }
+            #ld-bw-panel .ld-bw-tab-content { display:none; }
+            #ld-bw-panel .ld-bw-tab-content.active { display:block; }
         `;
         const style = document.createElement('style');
         style.id = 'ld-bw-style';
@@ -571,38 +459,52 @@
     function buildBwPanel() {
         injectBwStyles();
 
-        const btn = document.createElement('div');
-        btn.id = 'ld-bw-btn';
-        btn.innerHTML = '<span class="bw-ico">🚫</span><span class="bw-num">0</span>';
-        btn.title = '屏蔽词管理（可拖动）';
+        // 顶部栏徽章入口
+        const trigger = document.createElement('button');
+        trigger.id = HEADER_TRIGGER_ID;
+        trigger.type = 'button';
+        trigger.title = '屏蔽词管理';
+        trigger.innerHTML = '<span class="bw-ico">🚫</span><span class="bw-num">0</span>';
 
         const panel = document.createElement('div');
         panel.id = 'ld-bw-panel';
         panel.innerHTML = `
             <div class="ld-bw-head">
                 <span class="ld-bw-title">屏蔽词管理</span>
-                <label class="ld-bw-pause-label"><input type="checkbox" class="ld-bw-pause" /> 启用屏蔽</label>
                 <span class="ld-bw-close" style="cursor:pointer;font-weight:400;">✕</span>
             </div>
+            <div class="ld-bw-tabs">
+                <div class="ld-bw-tab active" data-tab="title">标题屏蔽</div>
+                <div class="ld-bw-tab" data-tab="category">分类屏蔽</div>
+            </div>
             <div class="ld-bw-body">
-                <div class="ld-bw-add">
-                    <input type="text" placeholder="输入关键词或正则，如 哈哈" />
-                    <button type="button" class="ld-bw-dot" title="在光标处插入 .* ">.*</button>
-                    <button type="button" class="ld-bw-submit">添加</button>
+                <div class="ld-bw-tab-content active" data-tab="title">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                        <label class="ld-bw-pause-label"><input type="checkbox" class="ld-bw-pause" /> 启用标题屏蔽</label>
+                    </div>
+                    <div class="ld-bw-add">
+                        <input type="text" placeholder="输入标题关键词或正则，如 哈哈" />
+                        <button type="button" class="ld-bw-dot" title="在光标处插入 .* ">.*</button>
+                        <button type="button" class="ld-bw-submit">添加</button>
+                    </div>
+                    <div class="ld-bw-preview"></div>
+                    <div id="ld-bw-chips"></div>
                 </div>
-                <div class="ld-bw-preview"></div>
-                <div id="ld-bw-chips"></div>
+                <div class="ld-bw-tab-content" data-tab="category">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                        <label class="ld-bw-pause-label"><input type="checkbox" class="ld-bw-cat-pause" /> 启用分类屏蔽</label>
+                    </div>
+                    <div class="ld-bw-add ld-bw-cat-add">
+                        <input type="text" placeholder="输入分类名，如 水源" />
+                        <button type="button" class="ld-bw-cat-submit">添加</button>
+                    </div>
+                    <div id="ld-bw-cat-chips"></div>
+                </div>
             </div>
         `;
-        document.body.appendChild(btn);
         document.body.appendChild(panel);
 
-        // 恢复上次位置 + 绑定拖拽
-        const savedPos = getBtnPos();
-        if (savedPos) applyBtnPos(btn, savedPos.x, savedPos.y);
-        makeDraggable(btn, toggleBwPanel);
-
-        const input = panel.querySelector('input[type=text]');
+        const input = panel.querySelector('.ld-bw-tab-content[data-tab="title"] input[type=text]');
         const submitBtn = panel.querySelector('.ld-bw-submit');
         const dotBtn = panel.querySelector('.ld-bw-dot');
         const chips = panel.querySelector('#ld-bw-chips');
@@ -610,9 +512,96 @@
         const pauseToggle = panel.querySelector('.ld-bw-pause');
         const closeBtn = panel.querySelector('.ld-bw-close');
 
-        bwState = { btn, panel, input, list: chips, preview, pauseToggle };
+        const catInput = panel.querySelector('.ld-bw-cat-add input[type=text]');
+        const catSubmitBtn = panel.querySelector('.ld-bw-cat-submit');
+        const catChips = panel.querySelector('#ld-bw-cat-chips');
+        const catPauseToggle = panel.querySelector('.ld-bw-cat-pause');
+
+        bwState = { trigger, panel, input, list: chips, catList: catChips, preview, pauseToggle, catPauseToggle, activeTab: 'title' };
         buildPreviewBox(preview);
         updatePreview();
+
+        // --- Tab 切换 ---
+        panel.querySelectorAll('.ld-bw-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                const target = tab.dataset.tab;
+                bwState.activeTab = target;
+                panel.querySelectorAll('.ld-bw-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === target));
+                panel.querySelectorAll('.ld-bw-tab-content').forEach(c => c.classList.toggle('active', c.dataset.tab === target));
+            });
+        });
+
+        // --- 分类屏蔽词逻辑 ---
+        const addCatWord = () => {
+            const val = catInput.value.trim();
+            if (!val) return;
+            if (!compileRegex(val)) { catInput.classList.add('invalid'); catInput.focus(); return; }
+            const words = getCatBlockWords();
+            if (!words.includes(val)) {
+                words.push(val);
+                setCatBlockWords(words);
+            }
+            catInput.value = '';
+            renderCatChips();
+            applyBlockFilter();
+        };
+        catSubmitBtn.addEventListener('click', addCatWord);
+        catInput.addEventListener('keydown', e => { if (e.key === 'Enter') addCatWord(); });
+        catInput.addEventListener('input', () => catInput.classList.remove('invalid'));
+
+        function editCatWord(word) {
+            const existing = catInput.value.trim();
+            if (existing && existing !== word) {
+                if (!confirm('输入框已有内容，是否用此关键字替换？')) return;
+            }
+            setCatBlockWords(getCatBlockWords().filter(x => x !== word));
+            catInput.value = word;
+            catInput.focus();
+            catInput.selectionStart = catInput.selectionEnd = catInput.value.length;
+            renderCatChips();
+            applyBlockFilter();
+        }
+
+        catPauseToggle.checked = isCatBlockEnabled();
+        catPauseToggle.addEventListener('change', () => {
+            setCatBlockEnabled(catPauseToggle.checked);
+            applyBlockFilter();
+        });
+
+        function renderCatChips() {
+            if (!catChips) return;
+            const words = getCatBlockWords();
+            catChips.innerHTML = '';
+            if (!words.length) {
+                const empty = document.createElement('div');
+                empty.style.cssText = 'color:var(--primary-medium,#999);padding:6px 0;';
+                empty.textContent = '暂无分类屏蔽词';
+                catChips.appendChild(empty);
+            } else {
+                words.forEach(w => {
+                    const chip = document.createElement('span');
+                    chip.className = 'chip';
+                    const label = document.createElement('span');
+                    label.className = 'chip-label';
+                    label.textContent = w;
+                    label.title = '点击编辑';
+                    label.addEventListener('click', () => editCatWord(w));
+                    const close = document.createElement('span');
+                    close.className = 'chip-close';
+                    close.textContent = '✕';
+                    close.title = '移除';
+                    close.addEventListener('click', () => {
+                        setCatBlockWords(getCatBlockWords().filter(x => x !== w));
+                        renderCatChips();
+                        applyBlockFilter();
+                    });
+                    chip.appendChild(label);
+                    chip.appendChild(close);
+                    catChips.appendChild(chip);
+                });
+            }
+        }
+        renderCatChips();
 
         // 在光标处插入 .*
         dotBtn.addEventListener('click', () => {
@@ -644,13 +633,19 @@
         input.addEventListener('input', updatePreview);
         closeBtn.addEventListener('click', () => closeBwPanel());
 
-        // 点击面板与按钮之外的区域，自动关闭面板
+        // 徽章点击 toggle 面板
+        trigger.addEventListener('click', () => toggleBwPanel());
+
+        // 点击面板与徽章之外的区域，自动关闭面板
         document.addEventListener('mousedown', (e) => {
             if (!isPanelOpen()) return;
             const t = e.target;
-            if (panel.contains(t) || btn.contains(t)) return;
+            if (panel.contains(t) || trigger.contains(t)) return;
             closeBwPanel();
         });
+
+        // 窗口缩放时重新定位面板
+        window.addEventListener('resize', () => { if (isPanelOpen()) positionPanel(); });
 
         pauseToggle.checked = isBlockEnabled();
         pauseToggle.addEventListener('change', () => {
@@ -660,8 +655,17 @@
 
         renderBwChips();
 
-        // 首次加载后判定隐藏（默认右下角本就靠边，需正确收起）
-        requestAnimationFrame(() => checkAndAutoHide(btn));
+        // 把徽章插入顶部栏。Discourse 头部异步渲染、路由切换会重建 .d-header，
+        // 所以持续监听 body：每次变更都尝试幂等插入（已正确插入则跳过）
+        const tryInject = () => injectHeaderTrigger(trigger);
+        const ensureInjected = () => { if (!trigger.parentElement) tryInject(); };
+        const startObs = () => {
+            ensureInjected();
+            const obs = new MutationObserver(ensureInjected);
+            obs.observe(document.body, { childList: true, subtree: true });
+        };
+        if (document.body) startObs();
+        else document.addEventListener('DOMContentLoaded', startObs, { once: true });
     }
 
     function toggleBwPanel() {
@@ -669,14 +673,12 @@
         if (bwState.panel.style.display === 'block') {
             closeBwPanel();
         } else {
-            expandButton(bwState.btn); // 打开面板时展开按钮
             positionPanel();
             bwState.panel.style.display = 'block';
         }
     }
     function showBlockPanel() {
         if (bwState.panel) {
-            expandButton(bwState.btn); // 打开面板时展开按钮
             positionPanel();
             bwState.panel.style.display = 'block';
         }
