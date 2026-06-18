@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux.do 增强
 // @namespace    http://tampermonkey.net/
-// @version      1.1.0
+// @version      1.2.0
 // @description  在 connect.linux.do 页面检测到「允许」按钮时自动点击；在 linux.do 页面自动点击外链跳转弹窗、支持正则屏蔽词过滤帖子（标题/分类独立规则）、用户屏蔽、创建时间替换活动时间、实时预览；支持功能开关
 // @author       caolib
 // @match        https://connect.linux.do/*
@@ -446,6 +446,8 @@
                 padding:5px 10px; cursor:pointer; font-size:12px; color:#ccc; }
             #ld-bw-panel .ld-bw-cat-dropdown-item:hover { background:#3a3a3a; color:#e8e8e8; }
             .ld-created-at { margin-left:4px; color:#45B5AA; font-size:inherit; }
+            .ld-created-at::before { content:'/'; margin-right:4px; color:inherit; }
+            td.age { min-width:180px; }
             #ld-bw-panel .ld-bw-quick-item.added { opacity:.4; cursor:default; text-decoration:line-through; }
         `;
         const style = document.createElement('style');
@@ -677,7 +679,6 @@
                 });
             }
         }
-        renderCatChips();
 
         const SIDEBAR_ITEMS = [
             { type: 'cat', name: '开发调优', icon: '#code', color: '#32c3c3' },
@@ -701,6 +702,8 @@
             { type: 'tag', name: '精华神帖', icon: '#thumbs-up', color: '#00aeff' },
             { type: 'tag', name: '集中帖', icon: '#people-group', color: '#00aeff' },
         ];
+
+        renderCatChips();
 
         function buildCatDropdown(query) {
             let dropdown = catBody.querySelector('.ld-bw-cat-dropdown');
