@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux.do 增强
 // @namespace    http://tampermonkey.net/
-// @version      1.2.0
+// @version      1.3.0
 // @description  在 connect.linux.do 页面检测到「允许」按钮时自动点击；在 linux.do 页面自动点击外链跳转弹窗、支持正则屏蔽词过滤帖子（标题/分类独立规则）、用户屏蔽、创建时间替换活动时间、实时预览；支持功能开关
 // @author       caolib
 // @match        https://connect.linux.do/*
@@ -45,6 +45,83 @@
 
     if (typeof GM_registerMenuCommand !== 'undefined') {
         GM_registerMenuCommand('🚫 管理屏蔽词', () => showBlockPanel());
+    }
+
+    // ========== 配置导入导出 ==========
+    const CONFIG_KEYS = [
+        'feat_autoApprove', 'feat_autoExternal', 'feat_relativeCreatedAt',
+        'block_words_list', 'block_words_enabled',
+        'block_cat_words_list', 'block_cat_words_enabled',
+        'block_users_list', 'block_users_enabled',
+        'bw_preview_samples',
+    ];
+
+    function fallbackCopy(text) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;left:-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+    }
+
+    function showImportExportPanel(mode) {
+        const existing = document.getElementById('ld-ie-panel');
+        if (existing) existing.remove();
+        const panel = document.createElement('div');
+        panel.id = 'ld-ie-panel';
+        panel.style.cssText = 'position:fixed;z-index:200000;top:50%;left:50%;transform:translate(-50%,-50%);width:480px;max-height:80vh;background:#1e1e1e;color:#e8e8e8;border:1px solid #3a3a3a;border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.6);font-size:13px;';
+        const isImport = mode === 'import';
+        panel.innerHTML = `
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #3a3a3a;font-weight:600;">
+                <span>${isImport ? '📥 导入配置' : '📤 导出配置'}</span>
+                <span style="cursor:pointer;font-weight:400;opacity:.6;" id="ld-ie-close">✕</span>
+            </div>
+            <div style="padding:12px 16px;">
+                <textarea id="ld-ie-textarea" style="width:100%;height:220px;box-sizing:border-box;padding:8px;background:#2b2b2b;color:#e8e8e8;border:1px solid #3a3a3a;border-radius:6px;font-size:12px;font-family:Consolas,monospace;resize:vertical;" placeholder="${isImport ? '在此粘贴配置 JSON…' : ''}" ${isImport ? '' : 'readonly'}></textarea>
+                <div style="display:flex;gap:8px;margin-top:10px;justify-content:flex-end;">
+                    ${isImport ? '<button id="ld-ie-import-btn" style="padding:6px 16px;background:#0088cc;color:#fff;border:1px solid #0088cc;border-radius:6px;cursor:pointer;font-size:13px;">导入</button>' : '<button id="ld-ie-copy-btn" style="padding:6px 16px;background:#0088cc;color:#fff;border:1px solid #0088cc;border-radius:6px;cursor:pointer;font-size:13px;">复制到剪贴板</button>'}
+                </div>
+            </div>
+        `;
+        document.body.appendChild(panel);
+        const overlay = document.createElement('div');
+        overlay.id = 'ld-ie-overlay';
+        overlay.style.cssText = 'position:fixed;z-index:199999;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);';
+        document.body.appendChild(overlay);
+        const close = () => { panel.remove(); overlay.remove(); };
+        panel.querySelector('#ld-ie-close').addEventListener('click', close);
+        overlay.addEventListener('click', close);
+
+        if (isImport) {
+            panel.querySelector('#ld-ie-import-btn').addEventListener('click', () => {
+                const textarea = panel.querySelector('#ld-ie-textarea');
+                let data;
+                try { data = JSON.parse(textarea.value); } catch (e) { alert('JSON 格式无效，请检查粘贴内容'); return; }
+                if (typeof GM_setValue === 'undefined') { alert('不支持 GM_setValue，无法导入'); close(); return; }
+                let imported = 0;
+                CONFIG_KEYS.forEach(key => {
+                    if (key in data) { GM_setValue(key, data[key]); imported++; }
+                });
+                alert(`导入成功，已写入 ${imported} 项配置\n刷新页面生效`);
+                close();
+            });
+        } else {
+            if (typeof GM_getValue === 'undefined') { alert('不支持 GM_getValue'); close(); return; }
+            const data = {};
+            CONFIG_KEYS.forEach(key => { data[key] = GM_getValue(key, undefined); });
+            panel.querySelector('#ld-ie-textarea').value = JSON.stringify(data, null, 2);
+            panel.querySelector('#ld-ie-copy-btn').addEventListener('click', () => {
+                const json = panel.querySelector('#ld-ie-textarea').value;
+                if (typeof navigator.clipboard !== 'undefined' && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(json).then(() => close()).catch(() => { fallbackCopy(json); close(); });
+                } else {
+                    fallbackCopy(json);
+                    close();
+                }
+            });
+        }
     }
 
     // ========== 屏蔽词面板（仅 linux.do） ==========
@@ -524,6 +601,8 @@
         panel.innerHTML = `
             <div class="ld-bw-head">
                 <span class="ld-bw-title">屏蔽词管理</span>
+                <span class="ld-bw-ie-btn" title="导入配置" style="cursor:pointer;font-size:12px;opacity:.7;">导入</span>
+                <span class="ld-bw-ie-btn" title="导出配置" style="cursor:pointer;font-size:12px;opacity:.7;">导出</span>
                 <span class="ld-bw-close" style="cursor:pointer;font-weight:400;">✕</span>
             </div>
             <div class="ld-bw-tabs">
@@ -575,6 +654,9 @@
         const preview = panel.querySelector('.ld-bw-preview');
         const pauseToggle = panel.querySelector('.ld-bw-pause');
         const closeBtn = panel.querySelector('.ld-bw-close');
+        const ieBtns = panel.querySelectorAll('.ld-bw-ie-btn');
+        if (ieBtns[0]) ieBtns[0].addEventListener('click', () => showImportExportPanel('import'));
+        if (ieBtns[1]) ieBtns[1].addEventListener('click', () => showImportExportPanel('export'));
 
         const catInput = panel.querySelector('.ld-bw-cat-add input[type=text]');
         const catSubmitBtn = panel.querySelector('.ld-bw-cat-submit');
