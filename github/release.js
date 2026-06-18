@@ -279,6 +279,22 @@
         cursor: pointer; font-size: 22px; line-height: 1; padding: 0;
       }
       .gh-arch-help-close:hover { color: var(--color-fg-default, #e6edf3); }
+
+      .gh-scroll-top-btn {
+        position: fixed; right: 24px; bottom: 24px; z-index: 9999;
+        width: 40px; height: 40px; border-radius: 50%; border: none;
+        background-color: var(--button-default-bgColor-rest, var(--color-btn-bg, #21262d));
+        border: 1px solid var(--button-default-borderColor-rest, var(--color-btn-border, rgba(240,246,252,0.1)));
+        color: var(--button-default-fgColor-rest, var(--color-btn-text, #c9d1d9));
+        cursor: pointer; display: flex; align-items: center; justify-content: center;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        opacity: 0; pointer-events: none; transition: opacity 0.2s ease, background-color 0.15s ease;
+      }
+      .gh-scroll-top-btn:hover {
+        background-color: var(--button-default-bgColor-hover, var(--color-btn-hover-bg, #30363d));
+        border-color: var(--button-default-borderColor-hover, var(--color-btn-hover-border, rgba(240,246,252,0.3)));
+      }
+      .gh-scroll-top-btn.gh-visible { opacity: 1; pointer-events: auto; }
     `;
         document.head.appendChild(style);
     }
@@ -1106,15 +1122,36 @@
         return null;
     }
 
+    let _scrollTopBtn = null;
+    function injectScrollToTopButton() {
+        if (_scrollTopBtn) return;
+        const btn = document.createElement('button');
+        btn.className = 'gh-scroll-top-btn';
+        btn.title = '回到顶部';
+        btn.innerHTML = `<svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor"><path d="M8 4.25a.75.75 0 0 1 .53.22l4.25 4.25a.75.75 0 1 1-1.06 1.06L8 6.06 4.28 9.78a.75.75 0 1 1-1.06-1.06L7.47 4.47a.75.75 0 0 1 .53-.22Z"></path></svg>`;
+        btn.addEventListener('click', () => {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+        document.body.appendChild(btn);
+        _scrollTopBtn = btn;
+        const updateVisibility = () => {
+            const threshold = 300;
+            btn.classList.toggle('gh-visible', window.scrollY > threshold);
+        };
+        window.addEventListener('scroll', updateVisibility, { passive: true });
+        updateVisibility();
+    }
+
     function init() {
+        injectCSS();
+        injectScrollToTopButton();
+
         if (isEnabled('replaceTime')) {
             replaceRelativeTimes();
             startTimeObserver();
         }
 
         if (!/^\/[^\/]+\/[^\/]+\/releases/.test(window.location.pathname)) return;
-
-        injectCSS();
 
         const repoInfo = getRepoInfo();
         if (!repoInfo) return;
