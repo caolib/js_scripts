@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Linux.do 增强
 // @namespace    http://tampermonkey.net/
-// @version      0.8.0
-// @description  在 connect.linux.do 页面检测到「允许」按钮时自动点击；在 linux.do 页面自动点击外链跳转弹窗、支持正则屏蔽词过滤帖子（标题/分类独立规则）、实时预览；支持功能开关
+// @version      1.0.0
+// @description  在 connect.linux.do 页面检测到「允许」按钮时自动点击；在 linux.do 页面自动点击外链跳转弹窗、支持正则屏蔽词过滤帖子（标题/分类独立规则）、用户屏蔽、创建时间替换活动时间、实时预览；支持功能开关
 // @author       caolib
 // @match        https://connect.linux.do/*
 // @match        https://linux.do/*
@@ -51,7 +51,9 @@
     const BW_ENABLED_KEY = 'block_words_enabled';
     const CAT_WORDS_KEY = 'block_cat_words_list';
     const CAT_ENABLED_KEY = 'block_cat_words_enabled';
-    let bwState = { trigger: null, panel: null, input: null, list: null, catList: null, stat: null, pauseToggle: null, catPauseToggle: null, activeTab: 'title' };
+    const USER_KEY = 'block_users_list';
+    const USER_ENABLED_KEY = 'block_users_enabled';
+    let bwState = { trigger: null, panel: null, input: null, list: null, catList: null, userList: null, stat: null, pauseToggle: null, catPauseToggle: null, userPauseToggle: null, activeTab: 'title' };
 
     function getBlockWords() {
         if (typeof GM_getValue === 'undefined') return [];
@@ -84,6 +86,23 @@
     }
     function setCatBlockEnabled(v) {
         if (typeof GM_setValue !== 'undefined') GM_setValue(CAT_ENABLED_KEY, v);
+    }
+
+    // --- 用户屏蔽（精确全匹配，不区分大小写） ---
+    function getBlockUsers() {
+        if (typeof GM_getValue === 'undefined') return [];
+        const v = GM_getValue(USER_KEY, []);
+        return Array.isArray(v) ? v : [];
+    }
+    function setBlockUsers(users) {
+        if (typeof GM_setValue !== 'undefined') GM_setValue(USER_KEY, users);
+    }
+    function isUserBlockEnabled() {
+        if (typeof GM_getValue === 'undefined') return true;
+        return GM_getValue(USER_ENABLED_KEY, true);
+    }
+    function setUserBlockEnabled(v) {
+        if (typeof GM_setValue !== 'undefined') GM_setValue(USER_ENABLED_KEY, v);
     }
 
     // 支持 /pattern/flags 写法；非法正则返回 null
@@ -190,20 +209,33 @@
             });
         }
 
+        // --- 用户屏蔽（精确全匹配，不区分大小写） ---
+        const userEnabled = isUserBlockEnabled();
+        const userBlockList = userEnabled
+            ? getBlockUsers().map(u => u.trim().toLowerCase()).filter(Boolean)
+            : [];
+
         document.querySelectorAll('tr.topic-list-item').forEach(tr => {
             const title = tr.querySelector('.main-link a.title')?.textContent || '';
             const cat = tr.querySelector('.badge-category__name')?.textContent || '';
+            // 取第一个 a[data-user-card] 即帖子创建人
+            const author = tr.querySelector('a[data-user-card]')?.dataset.userCard || '';
 
             const titleHit = titleMatchers.some(re => re.test(title));
             const catHit = catMatchers.some(re => re.test(cat));
-            const hit = titleHit || catHit;
+            const userHit = userBlockList.includes(author.toLowerCase());
+            const hit = titleHit || catHit || userHit;
 
             if (hit) {
                 tr.style.display = 'none';
-                tr.dataset.blockedWords = '1';
-            } else if (tr.dataset.blockedWords) {
+                if (titleHit) tr.dataset.blockedTitle = '1'; else delete tr.dataset.blockedTitle;
+                if (catHit) tr.dataset.blockedCat = '1'; else delete tr.dataset.blockedCat;
+                if (userHit) tr.dataset.blockedUser = '1'; else delete tr.dataset.blockedUser;
+            } else {
                 tr.style.display = '';
-                delete tr.dataset.blockedWords;
+                delete tr.dataset.blockedTitle;
+                delete tr.dataset.blockedCat;
+                delete tr.dataset.blockedUser;
             }
         });
         updateBwStat();
@@ -211,9 +243,14 @@
 
     function updateBwStat() {
         if (!bwState.trigger) return;
-        const hidden = document.querySelectorAll('tr[data-blocked-words]').length;
-        const num = bwState.trigger.querySelector('.bw-num');
-        if (num) num.textContent = String(hidden);
+        const titleCount = document.querySelectorAll('tr[data-blocked-title]').length;
+        const catCount = document.querySelectorAll('tr[data-blocked-cat]').length;
+        const userCount = document.querySelectorAll('tr[data-blocked-user]').length;
+        const nums = bwState.trigger.querySelectorAll('.bw-num');
+        if (nums[0]) nums[0].textContent = String(titleCount);
+        if (nums[1]) nums[1].textContent = String(catCount);
+        if (nums[2]) nums[2].textContent = String(userCount);
+        bwState.trigger.title = `屏蔽管理 — 标题:${titleCount} 分类:${catCount} 用户:${userCount}`;
     }
 
     // --- 实时预览：用输入框草稿匹配示例句子，命中的显示为已屏蔽 ---
@@ -323,14 +360,15 @@
     function injectBwStyles() {
         if (document.getElementById('ld-bw-style')) return;
         const css = `
-            #ld-bw-trigger { display:inline-flex; align-items:center; gap:4px;
+            #ld-bw-trigger { display:inline-flex; align-items:center; gap:2px;
                 padding:6px 10px; font-size:13px; line-height:1; cursor:pointer;
                 border:1px solid var(--primary-low,#444); border-radius:999px;
                 background:transparent; color:var(--primary,#e8e8e8); }
             .header-dropdown-toggle #ld-bw-trigger { height:100%; }
             .header-dropdown-toggle { display:flex; align-items:center; }
             #ld-bw-trigger:hover { background:var(--primary-low,#333); }
-            #ld-bw-trigger .bw-num { font-variant-numeric:tabular-nums; min-width:10px; text-align:center; }
+            #ld-bw-trigger .bw-num { font-variant-numeric:tabular-nums; min-width:8px; text-align:center; }
+            #ld-bw-trigger .bw-sep { opacity:.4; margin:0 1px; }
             #ld-bw-panel { position: fixed; z-index: 100001;
                 width: 340px; display: none; overflow: hidden;
                 background:#1e1e1e; color:#e8e8e8; border:1px solid #3a3a3a;
@@ -355,13 +393,13 @@
             #ld-bw-panel button { cursor:pointer; border:1px solid #3a3a3a;
                 background:#2b2b2b; color:#e8e8e8; border-radius:6px; padding:0 10px;
                 height:32px; box-sizing:border-box; line-height:1; }
-            #ld-bw-chips, #ld-bw-cat-chips { display:flex; flex-wrap:wrap; gap:6px; }
-            #ld-bw-chips .chip, #ld-bw-cat-chips .chip { display:inline-flex; align-items:center; gap:4px; padding:3px 8px;
+            #ld-bw-chips, #ld-bw-cat-chips, #ld-bw-user-chips { display:flex; flex-wrap:wrap; gap:6px; }
+            #ld-bw-chips .chip, #ld-bw-cat-chips .chip, #ld-bw-user-chips .chip { display:inline-flex; align-items:center; gap:4px; padding:3px 8px;
                 background:#3a3a3a; color:#e8e8e8; border-radius:999px; }
-            #ld-bw-chips .chip-close, #ld-bw-cat-chips .chip-close { cursor:pointer; opacity:.6; color:#e8e8e8; }
-            #ld-bw-chips .chip-close:hover, #ld-bw-cat-chips .chip-close:hover { opacity:1; }
-            #ld-bw-chips .chip-label, #ld-bw-cat-chips .chip-label { cursor:pointer; }
-            #ld-bw-chips .chip-label:hover, #ld-bw-cat-chips .chip-label:hover { color:#9cdcfe; }
+            #ld-bw-chips .chip-close, #ld-bw-cat-chips .chip-close, #ld-bw-user-chips .chip-close { cursor:pointer; opacity:.6; color:#e8e8e8; }
+            #ld-bw-chips .chip-close:hover, #ld-bw-cat-chips .chip-close:hover, #ld-bw-user-chips .chip-close:hover { opacity:1; }
+            #ld-bw-chips .chip-label, #ld-bw-cat-chips .chip-label, #ld-bw-user-chips .chip-label { cursor:pointer; }
+            #ld-bw-chips .chip-label:hover, #ld-bw-cat-chips .chip-label:hover, #ld-bw-user-chips .chip-label:hover { color:#9cdcfe; }
             #ld-bw-foot { display:flex; align-items:center; justify-content:space-between;
                 padding:8px 12px; border-top:1px solid #3a3a3a; font-size:12px; color:#bbb; }
             #ld-bw-panel .ld-bw-toggles { display:flex; gap:12px; }
@@ -463,8 +501,8 @@
         const trigger = document.createElement('button');
         trigger.id = HEADER_TRIGGER_ID;
         trigger.type = 'button';
-        trigger.title = '屏蔽词管理';
-        trigger.innerHTML = '<span class="bw-ico">🚫</span><span class="bw-num">0</span>';
+        trigger.title = '屏蔽管理';
+        trigger.innerHTML = '<span class="bw-num">0</span><span class="bw-sep">/</span><span class="bw-num">0</span><span class="bw-sep">/</span><span class="bw-num">0</span>';
 
         const panel = document.createElement('div');
         panel.id = 'ld-bw-panel';
@@ -476,6 +514,7 @@
             <div class="ld-bw-tabs">
                 <div class="ld-bw-tab active" data-tab="title">标题屏蔽</div>
                 <div class="ld-bw-tab" data-tab="category">分类屏蔽</div>
+                <div class="ld-bw-tab" data-tab="user">用户屏蔽</div>
             </div>
             <div class="ld-bw-body">
                 <div class="ld-bw-tab-content active" data-tab="title">
@@ -500,6 +539,16 @@
                     </div>
                     <div id="ld-bw-cat-chips"></div>
                 </div>
+                <div class="ld-bw-tab-content" data-tab="user">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                        <label class="ld-bw-pause-label"><input type="checkbox" class="ld-bw-user-pause" /> 启用用户屏蔽</label>
+                    </div>
+                    <div class="ld-bw-add ld-bw-user-add">
+                        <input type="text" placeholder="输入用户名（精确匹配），如 spam_user" />
+                        <button type="button" class="ld-bw-user-submit">添加</button>
+                    </div>
+                    <div id="ld-bw-user-chips"></div>
+                </div>
             </div>
         `;
         document.body.appendChild(panel);
@@ -517,7 +566,12 @@
         const catChips = panel.querySelector('#ld-bw-cat-chips');
         const catPauseToggle = panel.querySelector('.ld-bw-cat-pause');
 
-        bwState = { trigger, panel, input, list: chips, catList: catChips, preview, pauseToggle, catPauseToggle, activeTab: 'title' };
+        const userInput = panel.querySelector('.ld-bw-user-add input[type=text]');
+        const userSubmitBtn = panel.querySelector('.ld-bw-user-submit');
+        const userChips = panel.querySelector('#ld-bw-user-chips');
+        const userPauseToggle = panel.querySelector('.ld-bw-user-pause');
+
+        bwState = { trigger, panel, input, list: chips, catList: catChips, userList: userChips, preview, pauseToggle, catPauseToggle, userPauseToggle, activeTab: 'title' };
         buildPreviewBox(preview);
         updatePreview();
 
@@ -603,7 +657,75 @@
         }
         renderCatChips();
 
-        // 在光标处插入 .*
+        // --- 用户屏蔽逻辑（精确全匹配） ---
+        const addUser = () => {
+            const val = userInput.value.trim();
+            if (!val) return;
+            const users = getBlockUsers();
+            if (!users.includes(val)) {
+                users.push(val);
+                setBlockUsers(users);
+            }
+            userInput.value = '';
+            renderUserChips();
+            applyBlockFilter();
+        };
+        userSubmitBtn.addEventListener('click', addUser);
+        userInput.addEventListener('keydown', e => { if (e.key === 'Enter') addUser(); });
+
+        function editUser(name) {
+            const existing = userInput.value.trim();
+            if (existing && existing !== name) {
+                if (!confirm('输入框已有内容，是否用此用户名替换？')) return;
+            }
+            setBlockUsers(getBlockUsers().filter(x => x !== name));
+            userInput.value = name;
+            userInput.focus();
+            userInput.selectionStart = userInput.selectionEnd = userInput.value.length;
+            renderUserChips();
+            applyBlockFilter();
+        }
+
+        userPauseToggle.checked = isUserBlockEnabled();
+        userPauseToggle.addEventListener('change', () => {
+            setUserBlockEnabled(userPauseToggle.checked);
+            applyBlockFilter();
+        });
+
+        function renderUserChips() {
+            if (!userChips) return;
+            const users = getBlockUsers();
+            userChips.innerHTML = '';
+            if (!users.length) {
+                const empty = document.createElement('div');
+                empty.style.cssText = 'color:var(--primary-medium,#999);padding:6px 0;';
+                empty.textContent = '暂无屏蔽用户';
+                userChips.appendChild(empty);
+            } else {
+                users.forEach(u => {
+                    const chip = document.createElement('span');
+                    chip.className = 'chip';
+                    const label = document.createElement('span');
+                    label.className = 'chip-label';
+                    label.textContent = u;
+                    label.title = '点击编辑';
+                    label.addEventListener('click', () => editUser(u));
+                    const close = document.createElement('span');
+                    close.className = 'chip-close';
+                    close.textContent = '✕';
+                    close.title = '移除';
+                    close.addEventListener('click', () => {
+                        setBlockUsers(getBlockUsers().filter(x => x !== u));
+                        renderUserChips();
+                        applyBlockFilter();
+                    });
+                    chip.appendChild(label);
+                    chip.appendChild(close);
+                    userChips.appendChild(chip);
+                });
+            }
+        }
+        renderUserChips();
         dotBtn.addEventListener('click', () => {
             const s = input.selectionStart ?? input.value.length;
             const e = input.selectionEnd ?? input.value.length;
@@ -695,6 +817,75 @@
         else document.addEventListener('DOMContentLoaded', start, { once: true });
     }
 
+    // ========== 创建时间替换活动时间 ==========
+    // 将帖子列表的「活动时间」（最后回复时间）替换为「创建时间」，使用相对时间格式
+    // 超过一年则显示绝对日期
+
+    function relativeTime(dateStr) {
+        const now = Date.now();
+        const then = new Date(dateStr).getTime();
+        const diff = now - then;
+        if (diff < 0) return '刚刚';
+        const seconds = Math.floor(diff / 1000);
+        const minutes = Math.floor(seconds / 60);
+        const hours = Math.floor(minutes / 60);
+        const days = Math.floor(hours / 24);
+        const months = Math.floor(days / 30);
+        const years = Math.floor(days / 365);
+        if (years >= 1) {
+            // 超过一年，使用绝对时间 YYYY-MM-DD
+            const d = new Date(then);
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${y}-${m}-${day}`;
+        }
+        if (months >= 1) return `${months} 个月`;
+        if (days >= 1) return `${days} 天`;
+        if (hours >= 1) return `${hours} 小时`;
+        if (minutes >= 1) return `${minutes} 分钟`;
+        return '刚刚';
+    }
+
+    function replaceActivityWithCreatedAt() {
+        document.querySelectorAll('tr.topic-list-item').forEach(tr => {
+            const relEl = tr.querySelector('td.activity .relative-date');
+            if (!relEl || relEl.dataset.createdAtReplaced) return;
+
+            // 从 td.activity 的 title 属性解析创建日期
+            // 格式: "创建日期：2026 年 6月 18 日 16:01\n最新：..."
+            const actTd = tr.querySelector('td.activity');
+            const title = actTd?.getAttribute('title') || '';
+            const m = title.match(/创建日期：(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日\s*(\d{1,2}):(\d{1,2})/);
+            if (!m) return;
+
+            const createdAt = new Date(
+                parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]),
+                parseInt(m[4]), parseInt(m[5])
+            );
+            const newText = relativeTime(createdAt.toISOString());
+            relEl.textContent = newText;
+            relEl.setAttribute('title', `创建于 ${createdAt.toLocaleString('zh-CN')}\n${title}`);
+            relEl.dataset.createdAtReplaced = '1';
+        });
+    }
+
+    let createdAtTimer = null;
+    function scheduleCreatedAtReplace() {
+        clearTimeout(createdAtTimer);
+        createdAtTimer = setTimeout(replaceActivityWithCreatedAt, 100);
+    }
+
+    function initCreatedAtReplace() {
+        const start = () => {
+            replaceActivityWithCreatedAt();
+            const obs = new MutationObserver(() => scheduleCreatedAtReplace());
+            obs.observe(document.body, { childList: true, subtree: true });
+        };
+        if (document.body) start();
+        else document.addEventListener('DOMContentLoaded', start, { once: true });
+    }
+
     const isConnectPage = location.hostname === 'connect.linux.do';
 
     // ========== 授权登录自动允许 ==========
@@ -752,10 +943,12 @@
         }, 2000);
     }
 
-    // ========== linux.do 站点增强（屏蔽词 + 外链跳转） ==========
+    // ========== linux.do 站点增强（屏蔽词 + 外链跳转 + 创建时间） ==========
     else {
         // 屏蔽词面板：独立于外链开关
         initBlockWords();
+        // 创建时间替换活动时间
+        initCreatedAtReplace();
 
         // ========== 自动点击外链跳转 ==========
         if (isEnabled('autoExternal')) {
