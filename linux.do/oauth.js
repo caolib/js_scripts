@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux.do 增强
 // @namespace    http://tampermonkey.net/
-// @version      1.0.0
+// @version      1.1.0
 // @description  在 connect.linux.do 页面检测到「允许」按钮时自动点击；在 linux.do 页面自动点击外链跳转弹窗、支持正则屏蔽词过滤帖子（标题/分类独立规则）、用户屏蔽、创建时间替换活动时间、实时预览；支持功能开关
 // @author       caolib
 // @match        https://connect.linux.do/*
@@ -20,6 +20,7 @@
     const FEATURES = {
         autoApprove: { key: 'feat_autoApprove', label: '自动允许 OAuth 授权', default: true },
         autoExternal: { key: 'feat_autoExternal', label: '自动跳过外链弹窗', default: true },
+        relativeCreatedAt: { key: 'feat_relativeCreatedAt', label: '创建时间替换活动时间', default: false },
     };
 
     function isEnabled(feature) {
@@ -218,11 +219,13 @@
         document.querySelectorAll('tr.topic-list-item').forEach(tr => {
             const title = tr.querySelector('.main-link a.title')?.textContent || '';
             const cat = tr.querySelector('.badge-category__name')?.textContent || '';
+            const tags = [...tr.querySelectorAll('.discourse-tags .discourse-tag')].map(t => t.dataset.tagName || t.textContent.trim());
+            const catAndTags = [cat, ...tags].filter(Boolean);
             // 取第一个 a[data-user-card] 即帖子创建人
             const author = tr.querySelector('a[data-user-card]')?.dataset.userCard || '';
 
             const titleHit = titleMatchers.some(re => re.test(title));
-            const catHit = catMatchers.some(re => re.test(cat));
+            const catHit = catAndTags.some(text => catMatchers.some(re => re.test(text)));
             const userHit = userBlockList.includes(author.toLowerCase());
             const hit = titleHit || catHit || userHit;
 
@@ -250,7 +253,7 @@
         if (nums[0]) nums[0].textContent = String(titleCount);
         if (nums[1]) nums[1].textContent = String(catCount);
         if (nums[2]) nums[2].textContent = String(userCount);
-        bwState.trigger.title = `屏蔽管理 — 标题:${titleCount} 分类:${catCount} 用户:${userCount}`;
+        bwState.trigger.title = `屏蔽管理 — 标题:${titleCount} 分类/标签:${catCount} 用户:${userCount}`;
     }
 
     // --- 实时预览：用输入框草稿匹配示例句子，命中的显示为已屏蔽 ---
@@ -362,8 +365,8 @@
         const css = `
             #ld-bw-trigger { display:inline-flex; align-items:center; gap:2px;
                 padding:6px 10px; font-size:13px; line-height:1; cursor:pointer;
-                border:1px solid var(--primary-low,#444); border-radius:999px;
-                background:transparent; color:var(--primary,#e8e8e8); }
+                border:1px solid var(--primary-low,#444); border-radius:4px;
+                background:transparent; color:var(--primary,#e8e8e8); margin-right:8px; }
             .header-dropdown-toggle #ld-bw-trigger { height:100%; }
             .header-dropdown-toggle { display:flex; align-items:center; }
             #ld-bw-trigger:hover { background:var(--primary-low,#333); }
@@ -395,7 +398,7 @@
                 height:32px; box-sizing:border-box; line-height:1; }
             #ld-bw-chips, #ld-bw-cat-chips, #ld-bw-user-chips { display:flex; flex-wrap:wrap; gap:6px; }
             #ld-bw-chips .chip, #ld-bw-cat-chips .chip, #ld-bw-user-chips .chip { display:inline-flex; align-items:center; gap:4px; padding:3px 8px;
-                background:#3a3a3a; color:#e8e8e8; border-radius:999px; }
+                background:#3a3a3a; color:#e8e8e8; border-radius:4px; }
             #ld-bw-chips .chip-close, #ld-bw-cat-chips .chip-close, #ld-bw-user-chips .chip-close { cursor:pointer; opacity:.6; color:#e8e8e8; }
             #ld-bw-chips .chip-close:hover, #ld-bw-cat-chips .chip-close:hover, #ld-bw-user-chips .chip-close:hover { opacity:1; }
             #ld-bw-chips .chip-label, #ld-bw-cat-chips .chip-label, #ld-bw-user-chips .chip-label { cursor:pointer; }
@@ -434,6 +437,16 @@
             #ld-bw-panel .ld-bw-tab.active { color:#e8e8e8; border-bottom-color:#0088cc; }
             #ld-bw-panel .ld-bw-tab-content { display:none; }
             #ld-bw-panel .ld-bw-tab-content.active { display:block; }
+            #ld-bw-panel .ld-bw-qi-icon { width:1em; height:1em; vertical-align:middle; margin-right:4px; }
+            #ld-bw-panel .ld-bw-chip-icon { width:.85em; height:.85em; vertical-align:middle; margin-right:3px; }
+            #ld-bw-panel .ld-bw-cat-dropdown { position:relative;
+                max-height:180px; overflow-y:auto;
+                background:#2b2b2b; border:1px solid #3a3a3a; border-radius:6px; margin-top:4px; }
+            #ld-bw-panel .ld-bw-cat-dropdown-item { display:flex; align-items:center; gap:4px;
+                padding:5px 10px; cursor:pointer; font-size:12px; color:#ccc; }
+            #ld-bw-panel .ld-bw-cat-dropdown-item:hover { background:#3a3a3a; color:#e8e8e8; }
+            .ld-created-at { margin-left:4px; color:#45B5AA; font-size:inherit; }
+            #ld-bw-panel .ld-bw-quick-item.added { opacity:.4; cursor:default; text-decoration:line-through; }
         `;
         const style = document.createElement('style');
         style.id = 'ld-bw-style';
@@ -531,10 +544,10 @@
                 </div>
                 <div class="ld-bw-tab-content" data-tab="category">
                     <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-                        <label class="ld-bw-pause-label"><input type="checkbox" class="ld-bw-cat-pause" /> 启用分类屏蔽</label>
+                        <label class="ld-bw-pause-label"><input type="checkbox" class="ld-bw-cat-pause" /> 启用分类/标签屏蔽</label>
                     </div>
                     <div class="ld-bw-add ld-bw-cat-add">
-                        <input type="text" placeholder="输入分类名，如 水源" />
+                        <input type="text" placeholder="输入分类或标签名，如 水源、纯水" />
                         <button type="button" class="ld-bw-cat-submit">添加</button>
                     </div>
                     <div id="ld-bw-cat-chips"></div>
@@ -565,6 +578,7 @@
         const catSubmitBtn = panel.querySelector('.ld-bw-cat-submit');
         const catChips = panel.querySelector('#ld-bw-cat-chips');
         const catPauseToggle = panel.querySelector('.ld-bw-cat-pause');
+        const catBody = panel.querySelector('.ld-bw-tab-content[data-tab="category"]');
 
         const userInput = panel.querySelector('.ld-bw-user-add input[type=text]');
         const userSubmitBtn = panel.querySelector('.ld-bw-user-submit');
@@ -586,6 +600,7 @@
         });
 
         // --- 分类屏蔽词逻辑 ---
+        const chipIconMeta = {};
         const addCatWord = () => {
             const val = catInput.value.trim();
             if (!val) return;
@@ -601,7 +616,9 @@
         };
         catSubmitBtn.addEventListener('click', addCatWord);
         catInput.addEventListener('keydown', e => { if (e.key === 'Enter') addCatWord(); });
-        catInput.addEventListener('input', () => catInput.classList.remove('invalid'));
+        catInput.addEventListener('input', () => { catInput.classList.remove('invalid'); buildCatDropdown(catInput.value); });
+        catInput.addEventListener('focus', () => buildCatDropdown(catInput.value));
+        catInput.addEventListener('blur', () => setTimeout(hideCatDropdown, 150));
 
         function editCatWord(word) {
             const existing = catInput.value.trim();
@@ -629,7 +646,7 @@
             if (!words.length) {
                 const empty = document.createElement('div');
                 empty.style.cssText = 'color:var(--primary-medium,#999);padding:6px 0;';
-                empty.textContent = '暂无分类屏蔽词';
+                empty.textContent = '暂无分类/标签屏蔽词';
                 catChips.appendChild(empty);
             } else {
                 words.forEach(w => {
@@ -637,7 +654,12 @@
                     chip.className = 'chip';
                     const label = document.createElement('span');
                     label.className = 'chip-label';
-                    label.textContent = w;
+                    const meta = chipIconMeta[w] || SIDEBAR_ITEMS.find(it => it.name === w);
+                    if (meta && meta.icon) {
+                        label.innerHTML = `<svg class="ld-bw-chip-icon" fill="${meta.color}" width=".85em" height=".85em" aria-hidden="true"><use href="${meta.icon}"></use></svg>${w}`;
+                    } else {
+                        label.textContent = w;
+                    }
                     label.title = '点击编辑';
                     label.addEventListener('click', () => editCatWord(w));
                     const close = document.createElement('span');
@@ -656,6 +678,69 @@
             }
         }
         renderCatChips();
+
+        const SIDEBAR_ITEMS = [
+            { type: 'cat', name: '开发调优', icon: '#code', color: '#32c3c3' },
+            { type: 'cat', name: '国产替代', icon: '#seedling', color: '#d12c25' },
+            { type: 'cat', name: '资源荟萃', icon: '#square-share-nodes', color: '#12a89d' },
+            { type: 'cat', name: '网盘资源', icon: '#hard-drive', color: '#16b176' },
+            { type: 'cat', name: '文档共建', icon: '#book', color: '#9cb6c4' },
+            { type: 'cat', name: '非我莫属', icon: '#briefcase', color: '#a8c6fe' },
+            { type: 'cat', name: '读书成诗', icon: '#book-open-reader', color: '#e0d900' },
+            { type: 'cat', name: '前沿快讯', icon: '#newspaper', color: '#bb8fce' },
+            { type: 'cat', name: '网络记忆', icon: '#rss', color: '#f7941d' },
+            { type: 'cat', name: '福利羊毛', icon: '#piggy-bank', color: '#e45735' },
+            { type: 'cat', name: '搞七捻三', icon: '#droplet', color: '#3ab54a' },
+            { type: 'cat', name: '虫洞广场', icon: '#hurricane', color: '#ff00f7' },
+            { type: 'cat', name: '运营反馈', icon: '#comments', color: '#808281' },
+            { type: 'tag', name: '人工智能', icon: '#brain', color: '#bd93f9' },
+            { type: 'tag', name: '公告', icon: '#bullhorn', color: '#00aeff' },
+            { type: 'tag', name: '原创', icon: '#lightbulb', color: '#00aeff' },
+            { type: 'tag', name: '快问快答', icon: '#circle-question', color: '#669d34' },
+            { type: 'tag', name: '抽奖', icon: '#shuffle', color: '#f7941d' },
+            { type: 'tag', name: '精华神帖', icon: '#thumbs-up', color: '#00aeff' },
+            { type: 'tag', name: '集中帖', icon: '#people-group', color: '#00aeff' },
+        ];
+
+        function buildCatDropdown(query) {
+            let dropdown = catBody.querySelector('.ld-bw-cat-dropdown');
+            if (dropdown) dropdown.remove();
+            const q = query.trim();
+            const blocked = getCatBlockWords();
+            const matches = SIDEBAR_ITEMS.filter(item => {
+                if (blocked.includes(item.name)) return false;
+                if (!q) return true;
+                return item.name.includes(q);
+            });
+            if (!matches.length) return;
+            dropdown = document.createElement('div');
+            dropdown.className = 'ld-bw-cat-dropdown';
+            matches.forEach(item => {
+                const row = document.createElement('div');
+                row.className = 'ld-bw-cat-dropdown-item' + (item.type === 'cat' ? ' is-cat' : ' is-tag');
+                row.innerHTML = `<svg class="ld-bw-qi-icon" fill="${item.color}" width="1em" height="1em" aria-hidden="true"><use href="${item.icon}"></use></svg><span>${item.name}</span>`;
+                row.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    const words = getCatBlockWords();
+                    if (!words.includes(item.name)) {
+                        words.push(item.name);
+                        setCatBlockWords(words);
+                        chipIconMeta[item.name] = { icon: item.icon, color: item.color };
+                    }
+                    catInput.value = '';
+                    renderCatChips();
+                    applyBlockFilter();
+                    hideCatDropdown();
+                });
+                dropdown.appendChild(row);
+            });
+            catBody.appendChild(dropdown);
+        }
+
+        function hideCatDropdown() {
+            const dropdown = catBody.querySelector('.ld-bw-cat-dropdown');
+            if (dropdown) dropdown.remove();
+        }
 
         // --- 用户屏蔽逻辑（精确全匹配） ---
         const addUser = () => {
@@ -818,8 +903,7 @@
     }
 
     // ========== 创建时间替换活动时间 ==========
-    // 将帖子列表的「活动时间」（最后回复时间）替换为「创建时间」，使用相对时间格式
-    // 超过一年则显示绝对日期
+    // 在帖子列表的活动时间旁追加创建时间的相对日期显示
 
     function relativeTime(diffMs) {
         const diff = diffMs;
@@ -844,59 +928,60 @@
         return '刚刚';
     }
 
+    function parseCreatedAt(title) {
+        const cn = title.match(/(?:创建日期|Created)[:：]\s*(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日\s*(\d{1,2}):(\d{2})/);
+        if (cn) {
+            const ts = new Date(parseInt(cn[1]), parseInt(cn[2]) - 1, parseInt(cn[3]), parseInt(cn[4]), parseInt(cn[5])).getTime();
+            if (!isNaN(ts)) return ts;
+        }
+        const en = title.match(/(?:Created)[:：]\s*(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}),\s+(\d{4})\s+(\d{1,2}):(\d{2})\s*(am|pm)/i);
+        if (en) {
+            const months = { jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11 };
+            const mo = months[en[1].toLowerCase()];
+            let h = parseInt(en[4]);
+            const m2 = parseInt(en[5]);
+            if (en[6].toLowerCase() === 'pm' && h !== 12) h += 12;
+            else if (en[6].toLowerCase() === 'am' && h === 12) h = 0;
+            const ts = new Date(parseInt(en[3]), mo, parseInt(en[2]), h, m2).getTime();
+            if (!isNaN(ts)) return ts;
+        }
+        return null;
+    }
+
     function replaceActivityWithCreatedAt() {
-        const rows = document.querySelectorAll('tr.topic-list-item');
-        const now = Date.now();
-        console.log(`[LD增强] 替换扫描: 找到 ${rows.length} 行`);
-        rows.forEach((tr, i) => {
-            const relEl = tr.querySelector('td.activity .relative-date');
-            if (!relEl) { console.log(`[LD增强] 行${i}: 未找到 .relative-date`); return; }
-            if (relEl.dataset.createdAtReplaced) return;
-
-            const actTd = tr.querySelector('td.activity');
-            const title = actTd?.getAttribute('title') || '';
-            console.log(`[LD增强] 行${i}: title="${title}", relEl=${relEl.outerHTML.substring(0, 200)}`);
-            if (!title) { console.log(`[LD增强] 行${i}: title 为空`); return; }
-            const m = title.match(/创建日期：(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日\s*(\d{1,2}):(\d{1,2})/);
-            if (!m) { console.log(`[LD增强] 行${i}: 正则未匹配`); return; }
-
-            const createdAt = new Date(
-                parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]),
-                parseInt(m[4]), parseInt(m[5])
-            );
-            const diffMs = now - createdAt.getTime();
-            const newText = relativeTime(diffMs);
-            console.log(`[LD增强] 行${i}: 替换为 "${newText}"`);
-            relEl.textContent = newText;
-            relEl.setAttribute('title', `创建于 ${createdAt.toLocaleString('zh-CN')}\n${title}`);
-            delete relEl.dataset.time;
-            delete relEl.dataset.format;
-            relEl.dataset.createdAtReplaced = '1';
+        document.querySelectorAll('td.age').forEach(td => {
+            if (td.querySelector('.ld-created-at')) return;
+            const title = td.getAttribute('title');
+            if (!title) return;
+            const ts = parseCreatedAt(title);
+            if (ts === null) return;
+            const diff = Date.now() - ts;
+            if (diff < 0) return;
+            const text = relativeTime(diff);
+            const anchor = td.querySelector('.post-activity');
+            if (!anchor) return;
+            const span = document.createElement('span');
+            span.className = 'ld-created-at';
+            span.textContent = text;
+            span.title = `创建于 ${new Date(ts).toLocaleString('zh-CN')}`;
+            anchor.appendChild(span);
         });
     }
 
     let createdAtTimer = null;
     function scheduleCreatedAtReplace() {
         clearTimeout(createdAtTimer);
-        createdAtTimer = setTimeout(replaceActivityWithCreatedAt, 100);
+        createdAtTimer = setTimeout(replaceActivityWithCreatedAt, 200);
     }
 
+    let createdAtObserver = null;
+    let createdAtInterval = null;
     function initCreatedAtReplace() {
         const start = () => {
-            console.log('[LD增强] initCreatedAtReplace start, rows:', document.querySelectorAll('tr.topic-list-item').length);
             replaceActivityWithCreatedAt();
-            const obs = new MutationObserver((mutations) => {
-                const rows = document.querySelectorAll('tr.topic-list-item');
-                if (rows.length > 0) {
-                    scheduleCreatedAtReplace();
-                }
-            });
-            obs.observe(document.body, { childList: true, subtree: true });
-            // 兜底：每隔2秒检查一次，确保不会漏掉
-            setInterval(() => {
-                const rows = document.querySelectorAll('tr.topic-list-item');
-                if (rows.length > 0) replaceActivityWithCreatedAt();
-            }, 2000);
+            createdAtObserver = new MutationObserver(() => scheduleCreatedAtReplace());
+            createdAtObserver.observe(document.body, { childList: true, subtree: true });
+            createdAtInterval = setInterval(replaceActivityWithCreatedAt, 3000);
         };
         if (document.body) start();
         else document.addEventListener('DOMContentLoaded', start, { once: true });
@@ -963,8 +1048,8 @@
     else {
         // 屏蔽词面板：独立于外链开关
         initBlockWords();
-        // 创建时间替换活动时间
-        initCreatedAtReplace();
+        // 创建时间替换活动时间（默认关闭）
+        if (isEnabled('relativeCreatedAt')) initCreatedAtReplace();
 
         // ========== 自动点击外链跳转 ==========
         if (isEnabled('autoExternal')) {
