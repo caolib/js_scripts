@@ -821,10 +821,8 @@
     // 将帖子列表的「活动时间」（最后回复时间）替换为「创建时间」，使用相对时间格式
     // 超过一年则显示绝对日期
 
-    function relativeTime(dateStr) {
-        const now = Date.now();
-        const then = new Date(dateStr).getTime();
-        const diff = now - then;
+    function relativeTime(diffMs) {
+        const diff = diffMs;
         if (diff < 0) return '刚刚';
         const seconds = Math.floor(diff / 1000);
         const minutes = Math.floor(seconds / 60);
@@ -833,39 +831,46 @@
         const months = Math.floor(days / 30);
         const years = Math.floor(days / 365);
         if (years >= 1) {
-            // 超过一年，使用绝对时间 YYYY-MM-DD
-            const d = new Date(then);
+            const d = new Date(Date.now() - diff);
             const y = d.getFullYear();
             const m = String(d.getMonth() + 1).padStart(2, '0');
             const day = String(d.getDate()).padStart(2, '0');
             return `${y}-${m}-${day}`;
         }
-        if (months >= 1) return `${months} 个月`;
-        if (days >= 1) return `${days} 天`;
-        if (hours >= 1) return `${hours} 小时`;
-        if (minutes >= 1) return `${minutes} 分钟`;
+        if (months >= 1) return `${months} 个月前`;
+        if (days >= 1) return `${days} 天前`;
+        if (hours >= 1) return `${hours} 小时前`;
+        if (minutes >= 1) return `${minutes} 分钟前`;
         return '刚刚';
     }
 
     function replaceActivityWithCreatedAt() {
-        document.querySelectorAll('tr.topic-list-item').forEach(tr => {
+        const rows = document.querySelectorAll('tr.topic-list-item');
+        const now = Date.now();
+        console.log(`[LD增强] 替换扫描: 找到 ${rows.length} 行`);
+        rows.forEach((tr, i) => {
             const relEl = tr.querySelector('td.activity .relative-date');
-            if (!relEl || relEl.dataset.createdAtReplaced) return;
+            if (!relEl) { console.log(`[LD增强] 行${i}: 未找到 .relative-date`); return; }
+            if (relEl.dataset.createdAtReplaced) return;
 
-            // 从 td.activity 的 title 属性解析创建日期
-            // 格式: "创建日期：2026 年 6月 18 日 16:01\n最新：..."
             const actTd = tr.querySelector('td.activity');
             const title = actTd?.getAttribute('title') || '';
+            console.log(`[LD增强] 行${i}: title="${title}", relEl=${relEl.outerHTML.substring(0, 200)}`);
+            if (!title) { console.log(`[LD增强] 行${i}: title 为空`); return; }
             const m = title.match(/创建日期：(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日\s*(\d{1,2}):(\d{1,2})/);
-            if (!m) return;
+            if (!m) { console.log(`[LD增强] 行${i}: 正则未匹配`); return; }
 
             const createdAt = new Date(
                 parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]),
                 parseInt(m[4]), parseInt(m[5])
             );
-            const newText = relativeTime(createdAt.toISOString());
+            const diffMs = now - createdAt.getTime();
+            const newText = relativeTime(diffMs);
+            console.log(`[LD增强] 行${i}: 替换为 "${newText}"`);
             relEl.textContent = newText;
             relEl.setAttribute('title', `创建于 ${createdAt.toLocaleString('zh-CN')}\n${title}`);
+            delete relEl.dataset.time;
+            delete relEl.dataset.format;
             relEl.dataset.createdAtReplaced = '1';
         });
     }
@@ -878,9 +883,20 @@
 
     function initCreatedAtReplace() {
         const start = () => {
+            console.log('[LD增强] initCreatedAtReplace start, rows:', document.querySelectorAll('tr.topic-list-item').length);
             replaceActivityWithCreatedAt();
-            const obs = new MutationObserver(() => scheduleCreatedAtReplace());
+            const obs = new MutationObserver((mutations) => {
+                const rows = document.querySelectorAll('tr.topic-list-item');
+                if (rows.length > 0) {
+                    scheduleCreatedAtReplace();
+                }
+            });
             obs.observe(document.body, { childList: true, subtree: true });
+            // 兜底：每隔2秒检查一次，确保不会漏掉
+            setInterval(() => {
+                const rows = document.querySelectorAll('tr.topic-list-item');
+                if (rows.length > 0) replaceActivityWithCreatedAt();
+            }, 2000);
         };
         if (document.body) start();
         else document.addEventListener('DOMContentLoaded', start, { once: true });
