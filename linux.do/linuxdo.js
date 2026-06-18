@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Linux.do 增强
+// @name         Linux.do 帖子过滤脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.4.0
-// @description  在 connect.linux.do 页面检测到「允许」按钮时自动点击；在 linux.do 页面自动点击外链跳转弹窗、支持正则屏蔽词过滤帖子（标题/分类独立规则）、用户屏蔽、显示帖子创建时间、实时预览；支持功能开关
+// @version      1.4.3
+// @description  linuxdo帖子过滤，屏蔽指定用户帖子
 // @author       caolib
 // @match        https://connect.linux.do/*
 // @match        https://linux.do/*
@@ -417,11 +417,9 @@
   // --- 实时预览：用输入框草稿匹配示例句子，命中的显示为已屏蔽 ---
   const DEFAULT_SAMPLES = [
     "【求助】这个软件怎么安装",
-    "今天军费到位了哈哈赶紧买显卡",
     "分享一个好用的效率工具",
-    "广告代发联系微信领福利",
-    "新人报道，求各位大佬眼熟",
-    "【报告】本周社区活跃度统计",
+    "天才程序员上线",
+    "新人报道",
   ];
   const BW_SAMPLES_KEY = "bw_preview_samples";
   function getSamples() {
