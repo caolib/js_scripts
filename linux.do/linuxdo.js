@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux.do 帖子过滤脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.4.3
+// @version      1.5.0
 // @description  linuxdo帖子过滤，屏蔽指定用户帖子
 // @author       caolib
 // @match        https://connect.linux.do/*
@@ -1346,12 +1346,79 @@
     }, 2000);
   }
 
-  // ========== linux.do 站点增强（屏蔽词 + 外链跳转 + 创建时间） ==========
+  // ========== linux.do 站点增强（屏蔽词 + 外链跳转 + 创建时间 + 用户卡片屏蔽） ==========
   else {
     // 屏蔽词面板：独立于外链开关
     initBlockWords();
     // 显示帖子创建时间（默认关闭）
     if (isEnabled("relativeCreatedAt")) initCreatedAtReplace();
+
+    // ========== 用户卡片屏蔽按钮 ==========
+    const injectBlockUserBtn = () => {
+      const card = document.querySelector("#user-card.show");
+      if (!card || card.querySelector(".ld-card-block-btn")) return;
+      const nameLink = card.querySelector('a[href^="/u/"]');
+      if (!nameLink) return;
+      const href = nameLink.getAttribute("href") || "";
+      const username = href.match(/\/u\/([^/]+)/)?.[1];
+      if (!username) return;
+      const buttonsOutlet = card.querySelector(
+        ".user-card-additional-buttons-outlet",
+      );
+      if (!buttonsOutlet) return;
+      const li = document.createElement("li");
+      li.className = "user-card-additional-buttons-outlet ld-card-block-btn ember-view";
+      const blocked = getBlockUsers()
+        .map((u) => u.trim().toLowerCase())
+        .filter(Boolean)
+        .includes(username.toLowerCase());
+      const btn = document.createElement("button");
+      btn.className = "btn btn-default btn-sm";
+      btn.type = "button";
+      btn.style.cssText = blocked
+        ? "opacity:.5;cursor:default;text-decoration:line-through;color:#e88;"
+        : "color:#e88;";
+      btn.textContent = blocked ? "已屏蔽" : "屏蔽该用户";
+      if (!blocked) {
+        btn.addEventListener("click", () => {
+          if (!confirm(`确定屏蔽用户「${username}」？`)) return;
+          const users = getBlockUsers();
+          if (!users.includes(username)) {
+            users.push(username);
+            setBlockUsers(users);
+          }
+          btn.textContent = "已屏蔽";
+          btn.style.cssText =
+            "opacity:.5;cursor:default;text-decoration:line-through;color:#e88;";
+          btn.disabled = true;
+          applyBlockFilter();
+        });
+      } else {
+        btn.disabled = true;
+      }
+      li.appendChild(btn);
+      buttonsOutlet.appendChild(li);
+    };
+
+    const cardObserver = new MutationObserver(() => {
+      const card = document.querySelector("#user-card");
+      if (card && card.classList.contains("show")) {
+        setTimeout(injectBlockUserBtn, 100);
+      }
+    });
+    const startCardObs = () => {
+      cardObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["class"],
+      });
+    };
+    if (document.body) startCardObs();
+    else
+      document.addEventListener("DOMContentLoaded", startCardObs, {
+        once: true,
+      });
 
     // ========== 自动点击外链跳转 ==========
     if (isEnabled("autoExternal")) {
