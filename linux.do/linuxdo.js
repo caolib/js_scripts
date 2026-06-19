@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux.do 帖子过滤脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.5.0
+// @version      1.5.1
 // @description  linuxdo帖子过滤，屏蔽指定用户帖子
 // @author       caolib
 // @match        https://connect.linux.do/*
@@ -1285,49 +1285,43 @@
   // ========== 授权登录自动允许 ==========
   if (isConnectPage) {
     if (!isEnabled("autoApprove")) return;
-    // 更精确：优先匹配 oauth-actions 内的主按钮；兜底匹配 approve 链接
-    const targetSelector =
-      '.oauth-actions a.btn-pill.btn-pill-primary[href^="/oauth2/approve/"], ' +
-      '.oauth-actions a[href^="/oauth2/approve/"], ' +
-      'a[href^="/oauth2/approve/"]';
+
+    const APPROVE_SELECTOR = 'a[href^="/oauth2/approve/"]';
 
     let clicked = false;
 
     function tryClickApprove() {
       if (clicked) return true;
-
-      const btn = document.querySelector(targetSelector);
+      const btn = document.querySelector(APPROVE_SELECTOR);
       if (!btn) return false;
 
       clicked = true;
 
-      // 先触发 click（有些站点会埋点/校验）
-      try {
-        btn.click();
-      } catch (_) {}
+      const href = btn.href || btn.getAttribute("href") &&
+        new URL(btn.getAttribute("href"), location.origin).href;
 
-      // 再强制跳转到绝对地址，避免 click 被拦
-      const href =
-        btn.href ||
-        (btn.getAttribute("href")
-          ? new URL(btn.getAttribute("href"), location.origin).href
-          : "");
-      if (href) location.assign(href);
+      btn.style.pointerEvents = "none";
+      btn.style.opacity = "0.4";
+      btn.removeAttribute("href");
+      btn.textContent = "已允许";
+
+      if (href) {
+        location.assign(href);
+      } else {
+        btn.click();
+      }
 
       return true;
     }
 
-    // 高频轮询（别用 1ms，浏览器实际也会被 clamp；10ms 更稳更省）
     const interval = setInterval(() => {
       if (tryClickApprove()) clearInterval(interval);
     }, 10);
 
-    // RAF 并行检测
     (function rafCheck() {
       if (!clicked && !tryClickApprove()) requestAnimationFrame(rafCheck);
     })();
 
-    // MutationObserver
     const observer = new MutationObserver(() => {
       if (tryClickApprove()) observer.disconnect();
     });
@@ -1339,11 +1333,11 @@
       });
     }
 
-    // 2 秒后清理
+    // 3 秒后清理
     setTimeout(() => {
       clearInterval(interval);
       observer.disconnect();
-    }, 2000);
+    }, 3000);
   }
 
   // ========== linux.do 站点增强（屏蔽词 + 外链跳转 + 创建时间 + 用户卡片屏蔽） ==========
