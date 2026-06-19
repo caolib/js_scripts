@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux.do 帖子过滤脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.5.1
+// @version      1.5.2
 // @description  linuxdo帖子过滤，屏蔽指定用户帖子
 // @author       caolib
 // @match        https://connect.linux.do/*
