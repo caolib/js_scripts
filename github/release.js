@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Release 增强显示
 // @namespace    http://tampermonkey.net/
-// @version      2.8.3
+// @version      2.9.0
 // @description  github release 所有文件下载量显示；文件安装包分组、添加平台标签；根据用户当前系统/架构排序，推荐最可能安装的文件；将相对时间替换为精确时间（兼容手机与PC端）；更新日志可手动折叠
 // @author       caolib
 // @match        https://github.com/*
@@ -153,12 +153,15 @@
         background-color: var(--controlAction-bgColor-hover, var(--color-action-list-item-default-hover-bg)) !important;
         text-decoration: none !important;
       }
-            .gh-proxy-fallback {
-                margin-left: 8px;
-                display: flex;
-                align-items: center;
-                flex-shrink: 0;
-            }
+      .gh-proxy-container {
+        margin-left: 8px;
+        display: flex;
+        align-items: center;
+        flex-shrink: 0;
+      }
+      .XIU2-RS.gh-xiu2-hidden {
+        display: none !important;
+      }
 
       /* OS / 架构 切换下拉框 */
       .gh-os-select, .gh-arch-select {
@@ -821,27 +824,22 @@
     }
 
     function processProxyButtons(detailsElem) {
-        function getOriginalDownloadUrl(row, xiuBox) {
+        function getOriginalDownloadUrl(row) {
             const directLink = row.querySelector('a[href*="/releases/download/"], a[href*="/archive/"]');
             if (directLink) {
                 const href = directLink.getAttribute('href');
                 if (href) return new URL(href, window.location.origin).href;
             }
-
-            const proxyLink = xiuBox ? xiuBox.querySelector('a.btn[href]') : null;
-            if (!proxyLink) return null;
-
-            const href = proxyLink.getAttribute('href') || '';
-            try {
-                const decoded = decodeURIComponent(href);
-                const match = decoded.match(/(https?:\/\/github\.com\/[^\s]+)$/i);
-                if (match) return match[1];
-            } catch (e) { }
-
             return null;
         }
 
-        function mergeProxySources(originalUrl, links) {
+        function collectXiuLinks(row) {
+            const xiuBox = row.querySelector('.XIU2-RS');
+            if (!xiuBox) return [];
+            return Array.from(xiuBox.querySelectorAll('a.btn[href]'));
+        }
+
+        function mergeProxySources(originalUrl, xiuLinks) {
             const merged = [];
             const seen = new Set();
 
@@ -857,55 +855,22 @@
                 pushIfNew(`https://ghproxy.net/${originalUrl}`, '镜像');
             }
 
-            links.forEach(link => {
-                pushIfNew(link.getAttribute('href') || '', link.textContent.trim());
+            xiuLinks.forEach(link => {
+                const href = link.getAttribute('href') || '';
+                const text = link.textContent.trim();
+                const title = link.getAttribute('title') || '';
+                let label = text;
+                if (title) {
+                    const providerMatch = title.match(/\[([^\]]+)\]/);
+                    if (providerMatch) label = `${text} (${providerMatch[1]})`;
+                }
+                pushIfNew(href, label);
             });
 
             return merged;
         }
 
-        function ensureProxyBox(row) {
-            let xiuBox = row.querySelector('.XIU2-RS');
-            if (xiuBox) return xiuBox;
-
-            xiuBox = document.createElement('div');
-            xiuBox.className = 'XIU2-RS gh-proxy-fallback';
-
-            const metaContainer = row.querySelector('.gh-meta-container');
-            const rightSection = row.querySelector('.col-md-6') || row.querySelector('.flex-auto.flex-justify-end');
-            const shaWrapper = rightSection ? rightSection.querySelector('.flex-1') : null;
-
-            if (rightSection) {
-                rightSection.appendChild(xiuBox);
-            } else if (metaContainer) {
-                metaContainer.appendChild(xiuBox);
-            } else if (shaWrapper) {
-                shaWrapper.appendChild(xiuBox);
-            } else {
-                row.appendChild(xiuBox);
-            }
-
-            return xiuBox;
-        }
-
-        const validRows = Array.from(detailsElem.querySelectorAll('li')).filter(row =>
-            row.querySelector('a[href*="/releases/download/"], a[href*="/archive/"]')
-        );
-
-        validRows.forEach(row => {
-            const xiuBox = ensureProxyBox(row);
-            if (xiuBox.dataset.dropdownInjected === 'true') return;
-
-            xiuBox.dataset.dropdownInjected = 'true';
-
-            const links = Array.from(xiuBox.querySelectorAll('a.btn'));
-            const originalUrl = getOriginalDownloadUrl(row, xiuBox);
-            const proxySources = mergeProxySources(originalUrl, links);
-            if (proxySources.length === 0) return;
-
-            xiuBox.style.display = 'flex';
-            xiuBox.style.alignItems = 'center';
-
+        function buildDropdown(proxySources) {
             const dropdown = document.createElement('div');
             dropdown.className = 'gh-proxy-dropdown';
 
@@ -928,9 +893,60 @@
 
             dropdown.appendChild(btn);
             dropdown.appendChild(menu);
+            return dropdown;
+        }
 
-            xiuBox.innerHTML = '';
-            xiuBox.appendChild(dropdown);
+        function ensureProxyContainer(row) {
+            let container = row.querySelector('.gh-proxy-container');
+            if (container) return container;
+
+            container = document.createElement('div');
+            container.className = 'gh-proxy-container';
+
+            const rightSection = row.querySelector('.col-md-6') || row.querySelector('.flex-auto.flex-justify-end');
+            const metaContainer = row.querySelector('.gh-meta-container');
+            const shaWrapper = rightSection ? rightSection.querySelector('.flex-1') : null;
+
+            if (rightSection) {
+                rightSection.appendChild(container);
+            } else if (metaContainer) {
+                metaContainer.appendChild(container);
+            } else if (shaWrapper) {
+                shaWrapper.appendChild(container);
+            } else {
+                row.appendChild(container);
+            }
+
+            return container;
+        }
+
+        const validRows = Array.from(detailsElem.querySelectorAll('li')).filter(row =>
+            row.querySelector('a[href*="/releases/download/"], a[href*="/archive/"]')
+        );
+
+        validRows.forEach(row => {
+            const xiuBox = row.querySelector('.XIU2-RS');
+            const xiuLinks = collectXiuLinks(row);
+            const container = ensureProxyContainer(row);
+            const existingDropdown = container.querySelector('.gh-proxy-dropdown');
+
+            const prevCount = parseInt(container.dataset.xiuLinkCount || '0');
+            if (existingDropdown && xiuLinks.length === prevCount) return;
+
+            if (existingDropdown) existingDropdown.remove();
+
+            if (xiuBox && !xiuBox.classList.contains('gh-xiu2-hidden')) {
+                xiuBox.classList.add('gh-xiu2-hidden');
+            }
+
+            const originalUrl = getOriginalDownloadUrl(row);
+            const proxySources = mergeProxySources(originalUrl, xiuLinks);
+            if (proxySources.length === 0) return;
+
+            container.dataset.xiuLinkCount = String(xiuLinks.length);
+
+            const dropdown = buildDropdown(proxySources);
+            container.appendChild(dropdown);
         });
     }
 
