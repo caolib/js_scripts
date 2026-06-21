@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux.do 帖子过滤脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.5.2
+// @version      1.5.3
 // @description  linuxdo帖子过滤，屏蔽指定用户帖子
 // @author       caolib
 // @match        https://connect.linux.do/*
@@ -608,7 +608,7 @@
             #ld-bw-panel .ld-bw-cat-dropdown-item { display:flex; align-items:center; gap:4px;
                 padding:5px 10px; cursor:pointer; font-size:12px; color:#ccc; }
             #ld-bw-panel .ld-bw-cat-dropdown-item:hover { background:#3a3a3a; color:#e8e8e8; }
-            .ld-created-at { margin-left:4px; color:#45B5AA; font-size:inherit; }
+            .ld-created-at { margin-left:4px; font-size:inherit; }
             .ld-created-at::before { content:'/'; margin-right:4px; color:inherit; }
             td.age { min-width:180px; }
             #ld-bw-panel .ld-bw-quick-item.added { opacity:.4; cursor:default; text-decoration:line-through; }
@@ -1164,6 +1164,24 @@
   // ========== 显示帖子创建时间 ==========
   // 在帖子列表的活动时间旁追加创建时间的相对日期显示
 
+  const CREATED_AT_THRESHOLDS = [
+    { maxMs: 10 * 60 * 1000, color: "#22C55E" },
+    { maxMs: 30 * 60 * 1000, color: "#84CC16" },
+    { maxMs: 3 * 60 * 60 * 1000, color: "#EAB308" },
+    { maxMs: 24 * 60 * 60 * 1000, color: "#F59E0B" },
+    { maxMs: 7 * 24 * 60 * 60 * 1000, color: "#F97316" },
+    { maxMs: 30 * 24 * 60 * 60 * 1000, color: "#B45309" },
+    { maxMs: 365 * 24 * 60 * 60 * 1000, color: "#78716C" },
+    { maxMs: Infinity, color: "#44403C" },
+  ];
+
+  function createdAtColor(diffMs) {
+    for (const t of CREATED_AT_THRESHOLDS) {
+      if (diffMs < t.maxMs) return t.color;
+    }
+    return null;
+  }
+
   function relativeTime(diffMs) {
     const diff = diffMs;
     if (diff < 0) return "刚刚";
@@ -1252,6 +1270,8 @@
       span.className = "ld-created-at";
       span.textContent = text;
       span.title = `创建于 ${new Date(ts).toLocaleString("zh-CN")}`;
+      const color = createdAtColor(diff);
+      if (color) span.style.color = color;
       anchor.appendChild(span);
     });
   }
