@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Release 增强显示
 // @namespace    http://tampermonkey.net/
-// @version      2.9.0
+// @version      2.9.1
 // @description  github release 所有文件下载量显示；文件安装包分组、添加平台标签；根据用户当前系统/架构排序，推荐最可能安装的文件；将相对时间替换为精确时间（兼容手机与PC端）；更新日志可手动折叠
 // @author       caolib
 // @match        https://github.com/*
@@ -843,28 +843,24 @@
             const merged = [];
             const seen = new Set();
 
-            const pushIfNew = (href, text) => {
+            const pushIfNew = (href, text, title = '') => {
                 if (!href) return;
                 const key = href.trim();
                 if (!key || seen.has(key)) return;
                 seen.add(key);
-                merged.push({ href: key, text: text || '未命名' });
+                merged.push({ href: key, text: text || '未命名', title });
             };
 
             if (originalUrl) {
                 pushIfNew(`https://ghproxy.net/${originalUrl}`, '镜像');
             }
 
+            // 仅用链接文本作为菜单项名称（如「美国」），完整描述放入 title 供悬停查看
             xiuLinks.forEach(link => {
                 const href = link.getAttribute('href') || '';
                 const text = link.textContent.trim();
                 const title = link.getAttribute('title') || '';
-                let label = text;
-                if (title) {
-                    const providerMatch = title.match(/\[([^\]]+)\]/);
-                    if (providerMatch) label = `${text} (${providerMatch[1]})`;
-                }
-                pushIfNew(href, label);
+                pushIfNew(href, text, title);
             });
 
             return merged;
@@ -888,6 +884,7 @@
                 link.target = '_blank';
                 link.rel = 'noopener noreferrer';
                 link.textContent = source.text;
+                if (source.title) link.title = source.title;
                 menu.appendChild(link);
             });
 
