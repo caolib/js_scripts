@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux.do 帖子过滤脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.5.5
+// @version      1.5.6
 // @description  linuxdo帖子过滤，屏蔽指定用户帖子
 // @author       caolib
 // @match        https://connect.linux.do/*
@@ -555,19 +555,19 @@
             #ld-bw-panel .ld-bw-pause-label { display:flex; align-items:center; gap:4px; cursor:pointer;
                 font-weight:400; font-size:12px; color:#bbb; }
             #ld-bw-panel .ld-bw-body { padding:10px 12px; }
-            #ld-bw-panel .ld-bw-add { display:flex; gap:6px; margin-bottom:8px; align-items:center; }
+            #ld-bw-panel .ld-bw-add { display:flex; gap:6px; margin-bottom:8px; align-items:stretch; }
             #ld-bw-panel .ld-bw-add input[type=text],
-            #ld-bw-panel .ld-bw-add button { height:32px; box-sizing:border-box; line-height:1; }
+            #ld-bw-panel .ld-bw-add button { height:auto; box-sizing:border-box; line-height:1; }
             #ld-bw-panel .ld-bw-add .ld-bw-dot { flex:0 0 auto; padding:0 9px; font-family:Consolas,monospace; font-size:12px;
                 background:#1f2d3a; color:#9cdcfe; border:1px solid #2a5a7a; border-radius:6px; }
-            #ld-bw-panel .ld-bw-add input[type=text] { flex:1; min-width:0; padding:0 8px;
+            #ld-bw-panel .ld-bw-add input[type=text] { flex:1; min-width:0; padding:6px 8px; margin-bottom:unset;
                 border:1px solid #3a3a3a; border-radius:6px;
                 background:#2b2b2b; color:#e8e8e8; }
             #ld-bw-panel input[type=text]::placeholder { color:#888; }
             #ld-bw-panel .ld-bw-submit { background:#0088cc; color:#fff; border-color:#0088cc; }
             #ld-bw-panel button { cursor:pointer; border:1px solid #3a3a3a;
-                background:#2b2b2b; color:#e8e8e8; border-radius:6px; padding:0 10px;
-                height:32px; box-sizing:border-box; line-height:1; }
+                background:#2b2b2b; color:#e8e8e8; border-radius:6px; padding:6px 10px;
+                box-sizing:border-box; line-height:1; }
             #ld-bw-chips, #ld-bw-cat-chips, #ld-bw-user-chips { display:flex; flex-wrap:wrap; gap:6px; }
             #ld-bw-chips .chip, #ld-bw-cat-chips .chip, #ld-bw-user-chips .chip { display:inline-flex; align-items:center; gap:4px; padding:3px 8px;
                 background:#3a3a3a; color:#e8e8e8; border-radius:4px; }
@@ -594,10 +594,10 @@
             #ld-bw-panel .ld-bw-sample-add { display:flex; gap:6px; margin-top:6px; align-items:center; }
             #ld-bw-panel .ld-bw-sample-add input { flex:1; min-width:0; padding:0 8px; font-size:12px;
                 border:1px solid #3a3a3a; border-radius:6px; background:#262626; color:#e8e8e8;
-                height:32px; box-sizing:border-box; line-height:1; }
+                height:32px; box-sizing:border-box; line-height:1; margin-bottom:unset; }
             #ld-bw-panel .ld-bw-sample-add input::placeholder { color:#777; }
             #ld-bw-panel .ld-bw-sample-add button { flex:0 0 auto; padding:0 10px; font-size:13px;
-                height:32px; box-sizing:border-box; line-height:1; }
+                height:32px; box-sizing:border-box; line-height:1; margin-bottom:unset; }
             #ld-bw-panel .ld-bw-add .ld-bw-kw { flex:0 0 auto; padding:0 8px; font-family:Consolas,monospace;
                 font-size:11px; background:#1f3a2d; color:#9cdc9c; border-color:#2a5a3a; border-radius:6px; }
             #ld-bw-panel input[type=text].invalid { border-color:#c0392b; box-shadow:0 0 0 1px #c0392b inset; }
@@ -916,16 +916,6 @@
           close.addEventListener("click", () => {
             setCatBlockWords(getCatBlockWords().filter((x) => x !== w));
             renderCatChips();
-
-            const catWarnEl = panel.querySelector("#ld-bw-cat-warn");
-            const catWarnClose = panel.querySelector("#ld-bw-cat-warn-close");
-            if (isCatWarnDismissed()) {
-              catWarnEl.style.display = "none";
-            }
-            catWarnClose.addEventListener("click", () => {
-              catWarnEl.style.display = "none";
-              setCatWarnDismissed(true);
-            });
             applyBlockFilter();
           });
           chip.appendChild(label);
@@ -974,6 +964,16 @@
     ];
 
     renderCatChips();
+
+    const catWarnEl = panel.querySelector("#ld-bw-cat-warn");
+    const catWarnClose = panel.querySelector("#ld-bw-cat-warn-close");
+    if (isCatWarnDismissed()) {
+      catWarnEl.style.display = "none";
+    }
+    catWarnClose.addEventListener("click", () => {
+      catWarnEl.style.display = "none";
+      setCatWarnDismissed(true);
+    });
 
     function buildCatDropdown(query) {
       let dropdown = catBody.querySelector(".ld-bw-cat-dropdown");
