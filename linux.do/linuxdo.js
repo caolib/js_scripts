@@ -330,8 +330,8 @@
     const titleEnabled = isBlockEnabled();
     const titleRawWords = titleEnabled
       ? getBlockWords()
-          .map((w) => w.trim())
-          .filter(Boolean)
+        .map((w) => w.trim())
+        .filter(Boolean)
       : [];
     const titleMatchers = [];
     if (titleEnabled) {
@@ -345,8 +345,8 @@
     const catEnabled = isCatBlockEnabled();
     const catRawWords = catEnabled
       ? getCatBlockWords()
-          .map((w) => w.trim())
-          .filter(Boolean)
+        .map((w) => w.trim())
+        .filter(Boolean)
       : [];
     const catMatchers = [];
     if (catEnabled) {
@@ -360,8 +360,8 @@
     const userEnabled = isUserBlockEnabled();
     const userBlockList = userEnabled
       ? getBlockUsers()
-          .map((u) => u.trim().toLowerCase())
-          .filter(Boolean)
+        .map((u) => u.trim().toLowerCase())
+        .filter(Boolean)
       : [];
 
     document.querySelectorAll("tr.topic-list-item").forEach((tr) => {
@@ -527,10 +527,10 @@
     if (document.getElementById("ld-bw-style")) return;
     const css = `
             #ld-bw-trigger { display:inline-flex; align-items:center; gap:2px;
-                padding:6px 10px; font-size:13px; line-height:1; cursor:pointer;
-                border:1px solid var(--primary-low,#444); border-radius:4px;
+                padding:3px 8px; font-size:12px; line-height:1; cursor:pointer;
+                border:1px solid var(--header_primary-low-mid); border-radius:var(--d-button-border-radius);
                 background:transparent; color:var(--primary,#e8e8e8); margin-right:8px; }
-            .header-dropdown-toggle #ld-bw-trigger { height:100%; }
+            .header-dropdown-toggle #ld-bw-trigger { height:60%; }
             .header-dropdown-toggle { display:flex; align-items:center; }
             #ld-bw-trigger:hover { background:var(--primary-low,#333); }
             #ld-bw-trigger .bw-num { font-variant-numeric:tabular-nums; min-width:8px; text-align:center; }
@@ -1395,7 +1395,6 @@
       btn.textContent = blocked ? "已屏蔽" : "屏蔽该用户";
       if (!blocked) {
         btn.addEventListener("click", () => {
-          if (!confirm(`确定屏蔽用户「${username}」？`)) return;
           const users = getBlockUsers();
           if (!users.includes(username)) {
             users.push(username);
