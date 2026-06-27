@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux.do 帖子过滤脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.5.3
+// @version      1.5.5
 // @description  linuxdo帖子过滤，屏蔽指定用户帖子
 // @author       caolib
 // @match        https://connect.linux.do/*
@@ -71,6 +71,7 @@
     "block_users_list",
     "block_users_enabled",
     "bw_preview_samples",
+    "cat_warn_dismissed",
   ];
 
   function fallbackCopy(text) {
@@ -93,7 +94,7 @@
     const isImport = mode === "import";
     panel.innerHTML = `
             <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #3a3a3a;font-weight:600;">
-                <span>${isImport ? "📥 导入配置" : "📤 导出配置"}</span>
+                <span>${isImport ? "导入配置" : "导出配置"}</span>
                 <span style="cursor:pointer;font-weight:400;opacity:.6;" id="ld-ie-close">✕</span>
             </div>
             <div style="padding:12px 16px;">
@@ -422,6 +423,14 @@
     "新人报道",
   ];
   const BW_SAMPLES_KEY = "bw_preview_samples";
+  const CAT_WARN_DISMISSED_KEY = "cat_warn_dismissed";
+  function isCatWarnDismissed() {
+    if (typeof GM_getValue === "undefined") return false;
+    return GM_getValue(CAT_WARN_DISMISSED_KEY, false);
+  }
+  function setCatWarnDismissed(v) {
+    if (typeof GM_setValue !== "undefined") GM_setValue(CAT_WARN_DISMISSED_KEY, v);
+  }
   function getSamples() {
     if (typeof GM_getValue === "undefined") return DEFAULT_SAMPLES.slice();
     const v = GM_getValue(BW_SAMPLES_KEY, null);
@@ -602,6 +611,12 @@
             #ld-bw-panel .ld-bw-tab-content.active { display:block; }
             #ld-bw-panel .ld-bw-qi-icon { width:1em; height:1em; vertical-align:middle; margin-right:4px; }
             #ld-bw-panel .ld-bw-chip-icon { width:.85em; height:.85em; vertical-align:middle; margin-right:3px; }
+            #ld-bw-panel .ld-bw-cat-warn { display:flex; align-items:flex-start; gap:6px; margin-top:8px; padding:8px 10px;
+                background:#3a2a1a; border:1px solid #6b4e2e; border-radius:6px; font-size:12px; color:#f0c674; line-height:1.5; }
+            #ld-bw-panel .ld-bw-cat-warn-icon { flex:0 0 auto; font-size:14px; line-height:1.5; }
+            #ld-bw-panel .ld-bw-cat-warn-text { flex:1; min-width:0; }
+            #ld-bw-panel .ld-bw-cat-warn-close { flex:0 0 auto; cursor:pointer; opacity:.6; font-size:12px; }
+            #ld-bw-panel .ld-bw-cat-warn-close:hover { opacity:1; }
             #ld-bw-panel .ld-bw-cat-dropdown { position:relative;
                 max-height:180px; overflow-y:auto;
                 background:#2b2b2b; border:1px solid #3a3a3a; border-radius:6px; margin-top:4px; }
@@ -720,6 +735,11 @@
                         <button type="button" class="ld-bw-cat-submit">添加</button>
                     </div>
                     <div id="ld-bw-cat-chips"></div>
+                    <div class="ld-bw-cat-warn" id="ld-bw-cat-warn">
+                        <span class="ld-bw-cat-warn-icon">⚠️</span>
+                        <span class="ld-bw-cat-warn-text">添加过多分类屏蔽词可能导致首页大量帖子被屏蔽，进而触发频繁刷新。建议仅屏蔽确实不需要的分类。</span>
+                        <span class="ld-bw-cat-warn-close" id="ld-bw-cat-warn-close">✕</span>
+                    </div>
                 </div>
                 <div class="ld-bw-tab-content" data-tab="user">
                     <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
@@ -896,6 +916,16 @@
           close.addEventListener("click", () => {
             setCatBlockWords(getCatBlockWords().filter((x) => x !== w));
             renderCatChips();
+
+            const catWarnEl = panel.querySelector("#ld-bw-cat-warn");
+            const catWarnClose = panel.querySelector("#ld-bw-cat-warn-close");
+            if (isCatWarnDismissed()) {
+              catWarnEl.style.display = "none";
+            }
+            catWarnClose.addEventListener("click", () => {
+              catWarnEl.style.display = "none";
+              setCatWarnDismissed(true);
+            });
             applyBlockFilter();
           });
           chip.appendChild(label);
