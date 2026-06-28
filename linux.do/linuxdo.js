@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux.do 帖子过滤脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.5.6
+// @version      1.6.1
 // @description  linuxdo帖子过滤，屏蔽指定用户帖子
 // @author       caolib
 // @match        https://connect.linux.do/*
@@ -70,6 +70,8 @@
     "block_cat_words_enabled",
     "block_users_list",
     "block_users_enabled",
+    "block_time_limit_days",
+    "block_time_enabled",
     "bw_preview_samples",
     "cat_warn_dismissed",
   ];
@@ -185,6 +187,16 @@
   const CAT_ENABLED_KEY = "block_cat_words_enabled";
   const USER_KEY = "block_users_list";
   const USER_ENABLED_KEY = "block_users_enabled";
+  const TIME_LIMIT_DAYS_KEY = "block_time_limit_days";
+  const TIME_ENABLED_KEY = "block_time_enabled";
+  const TIME_PRESET_OPTIONS = [
+    { label: "7天前", value: 7 },
+    { label: "30天前(1个月)", value: 30 },
+    { label: "90天前(3个月)", value: 90 },
+    { label: "180天前(6个月)", value: 180 },
+    { label: "1年前", value: 365 },
+    { label: "3年前", value: 1095 },
+  ];
   let bwState = {
     trigger: null,
     panel: null,
@@ -196,6 +208,9 @@
     pauseToggle: null,
     catPauseToggle: null,
     userPauseToggle: null,
+    timePauseToggle: null,
+    timeInput: null,
+    timePresetContainer: null,
     activeTab: "title",
   };
 
@@ -247,6 +262,30 @@
   }
   function setUserBlockEnabled(v) {
     if (typeof GM_setValue !== "undefined") GM_setValue(USER_ENABLED_KEY, v);
+  }
+
+  function getBlockTimeLimitDays() {
+    if (typeof GM_getValue === "undefined") return 0;
+    const v = GM_getValue(TIME_LIMIT_DAYS_KEY, 0);
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    return Math.floor(n);
+  }
+  function setBlockTimeLimitDays(v) {
+    if (typeof GM_setValue === "undefined") return;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) {
+      GM_setValue(TIME_LIMIT_DAYS_KEY, 0);
+      return;
+    }
+    GM_setValue(TIME_LIMIT_DAYS_KEY, Math.floor(n));
+  }
+  function isTimeBlockEnabled() {
+    if (typeof GM_getValue === "undefined") return false;
+    return GM_getValue(TIME_ENABLED_KEY, false);
+  }
+  function setTimeBlockEnabled(v) {
+    if (typeof GM_setValue !== "undefined") GM_setValue(TIME_ENABLED_KEY, !!v);
   }
 
   // 支持 /pattern/flags 写法；非法正则返回 null
@@ -364,6 +403,10 @@
         .map((u) => u.trim().toLowerCase())
         .filter(Boolean)
       : [];
+    const timeEnabled = isTimeBlockEnabled();
+    const timeLimitDays = timeEnabled ? getBlockTimeLimitDays() : 0;
+    const timeLimitMs = timeLimitDays > 0 ? timeLimitDays * 24 * 60 * 60 * 1000 : 0;
+    const now = Date.now();
 
     document.querySelectorAll("tr.topic-list-item").forEach((tr) => {
       const title = tr.querySelector(".main-link a.title")?.textContent || "";
@@ -375,13 +418,20 @@
       // 取第一个 a[data-user-card] 即帖子创建人
       const author =
         tr.querySelector("a[data-user-card]")?.dataset.userCard || "";
+      const ageCell = tr.querySelector("td.age");
+      const ageTitle = ageCell?.getAttribute("title") || "";
+      const createdTs = parseCreatedAt(ageTitle);
+      const timeHit =
+        timeLimitMs > 0 && Number.isFinite(createdTs)
+          ? now - createdTs >= timeLimitMs
+          : false;
 
       const titleHit = titleMatchers.some((re) => re.test(title));
       const catHit = catAndTags.some((text) =>
         catMatchers.some((re) => re.test(text)),
       );
       const userHit = userBlockList.includes(author.toLowerCase());
-      const hit = titleHit || catHit || userHit;
+      const hit = titleHit || catHit || userHit || timeHit;
 
       if (hit) {
         tr.style.display = "none";
@@ -391,11 +441,14 @@
         else delete tr.dataset.blockedCat;
         if (userHit) tr.dataset.blockedUser = "1";
         else delete tr.dataset.blockedUser;
+        if (timeHit) tr.dataset.blockedTime = "1";
+        else delete tr.dataset.blockedTime;
       } else {
         tr.style.display = "";
         delete tr.dataset.blockedTitle;
         delete tr.dataset.blockedCat;
         delete tr.dataset.blockedUser;
+        delete tr.dataset.blockedTime;
       }
     });
     updateBwStat();
@@ -408,11 +461,13 @@
     ).length;
     const catCount = document.querySelectorAll("tr[data-blocked-cat]").length;
     const userCount = document.querySelectorAll("tr[data-blocked-user]").length;
+    const timeCount = document.querySelectorAll("tr[data-blocked-time]").length;
     const nums = bwState.trigger.querySelectorAll(".bw-num");
     if (nums[0]) nums[0].textContent = String(titleCount);
     if (nums[1]) nums[1].textContent = String(catCount);
     if (nums[2]) nums[2].textContent = String(userCount);
-    bwState.trigger.title = `屏蔽管理 — 标题:${titleCount} 分类/标签:${catCount} 用户:${userCount}`;
+    if (nums[3]) nums[3].textContent = String(timeCount);
+    bwState.trigger.title = `屏蔽管理 — 标题:${titleCount} 分类/标签:${catCount} 用户:${userCount} 创建时间:${timeCount}`;
   }
 
   // --- 实时预览：用输入框草稿匹配示例句子，命中的显示为已屏蔽 ---
@@ -427,6 +482,11 @@
   function isCatWarnDismissed() {
     if (typeof GM_getValue === "undefined") return false;
     return GM_getValue(CAT_WARN_DISMISSED_KEY, false);
+  }
+  function sanitizeTimeDaysInput(raw) {
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return Math.floor(n);
   }
   function setCatWarnDismissed(v) {
     if (typeof GM_setValue !== "undefined") GM_setValue(CAT_WARN_DISMISSED_KEY, v);
@@ -557,10 +617,12 @@
             #ld-bw-panel .ld-bw-body { padding:10px 12px; }
             #ld-bw-panel .ld-bw-add { display:flex; gap:6px; margin-bottom:8px; align-items:stretch; }
             #ld-bw-panel .ld-bw-add input[type=text],
+            #ld-bw-panel .ld-bw-add input[type=number],
             #ld-bw-panel .ld-bw-add button { height:auto; box-sizing:border-box; line-height:1; }
             #ld-bw-panel .ld-bw-add .ld-bw-dot { flex:0 0 auto; padding:0 9px; font-family:Consolas,monospace; font-size:12px;
                 background:#1f2d3a; color:#9cdcfe; border:1px solid #2a5a7a; border-radius:6px; }
-            #ld-bw-panel .ld-bw-add input[type=text] { flex:1; min-width:0; padding:6px 8px; margin-bottom:unset;
+            #ld-bw-panel .ld-bw-add input[type=text],
+            #ld-bw-panel .ld-bw-add input[type=number] { flex:1; min-width:0; padding:6px 8px; margin-bottom:unset;
                 border:1px solid #3a3a3a; border-radius:6px;
                 background:#2b2b2b; color:#e8e8e8; }
             #ld-bw-panel input[type=text]::placeholder { color:#888; }
@@ -696,7 +758,7 @@
     trigger.type = "button";
     trigger.title = "屏蔽管理";
     trigger.innerHTML =
-      '<span class="bw-num">0</span><span class="bw-sep">/</span><span class="bw-num">0</span><span class="bw-sep">/</span><span class="bw-num">0</span>';
+      '<span class="bw-num">0</span><span class="bw-sep">/</span><span class="bw-num">0</span><span class="bw-sep">/</span><span class="bw-num">0</span><span class="bw-sep">/</span><span class="bw-num">0</span>';
 
     const panel = document.createElement("div");
     panel.id = "ld-bw-panel";
@@ -712,6 +774,7 @@
                 <div class="ld-bw-tab active" data-tab="title">标题屏蔽</div>
                 <div class="ld-bw-tab" data-tab="category">分类屏蔽</div>
                 <div class="ld-bw-tab" data-tab="user">用户屏蔽</div>
+                <div class="ld-bw-tab" data-tab="time">时间阈值</div>
             </div>
             <div class="ld-bw-body">
                 <div class="ld-bw-tab-content active" data-tab="title">
@@ -751,6 +814,17 @@
                     </div>
                     <div id="ld-bw-user-chips"></div>
                 </div>
+                <div class="ld-bw-tab-content" data-tab="time">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                        <label class="ld-bw-pause-label"><input type="checkbox" class="ld-bw-time-pause" /> 启用时间阈值屏蔽</label>
+                    </div>
+                    <div class="ld-bw-add ld-bw-time-add">
+                        <input type="number" min="1" step="1" placeholder="输入天数，如 365" class="ld-bw-time-input" />
+                        <button type="button" class="ld-bw-time-set">应用</button>
+                    </div>
+                    <div id="ld-bw-time-presets" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;"></div>
+                    <div class="ld-bw-time-tip" style="margin:6px 0 10px;color:#999;font-size:12px;line-height:1.4;"></div>
+                </div>
             </div>
         `;
     document.body.appendChild(panel);
@@ -783,7 +857,16 @@
             GM_setValue(key, feat[1].default);
             return;
           }
+          if (key === TIME_LIMIT_DAYS_KEY) {
+            GM_setValue(key, 0);
+            return;
+          }
+          if (key === TIME_ENABLED_KEY) {
+            GM_setValue(key, false);
+            return;
+          }
           if (key.includes("_enabled")) GM_setValue(key, true);
+          else if (key === CAT_WARN_DISMISSED_KEY) GM_setValue(key, false);
           else GM_setValue(key, []);
         });
         alert("已重置，刷新页面生效");
@@ -801,6 +884,11 @@
     const userSubmitBtn = panel.querySelector(".ld-bw-user-submit");
     const userChips = panel.querySelector("#ld-bw-user-chips");
     const userPauseToggle = panel.querySelector(".ld-bw-user-pause");
+    const timeInput = panel.querySelector(".ld-bw-time-input");
+    const timeApplyBtn = panel.querySelector(".ld-bw-time-set");
+    const timePauseToggle = panel.querySelector(".ld-bw-time-pause");
+    const timePresetContainer = panel.querySelector("#ld-bw-time-presets");
+    const timeTip = panel.querySelector(".ld-bw-time-tip");
 
     bwState = {
       trigger,
@@ -813,6 +901,9 @@
       pauseToggle,
       catPauseToggle,
       userPauseToggle,
+      timePauseToggle,
+      timeInput,
+      timePresetContainer,
       activeTab: "title",
     };
     buildPreviewBox(preview);
@@ -1055,6 +1146,81 @@
       applyBlockFilter();
     });
 
+    const buildTimePresetChips = () => {
+      if (!timePresetContainer || !timeInput) return;
+      timePresetContainer.innerHTML = "";
+      TIME_PRESET_OPTIONS.forEach((item) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "ld-bw-kw";
+        btn.textContent = item.label;
+        btn.title = `设置为${item.label}`;
+        btn.addEventListener("click", () => {
+          setBlockTimeLimitDays(item.value);
+          timeInput.value = String(item.value);
+          if (timeTip) timeTip.textContent = `已设置为：${item.label}`;
+          timeInput.classList.remove("invalid");
+          applyBlockFilter();
+        });
+        timePresetContainer.appendChild(btn);
+      });
+    };
+
+    const applyTimeLimit = () => {
+      if (!timeInput) return;
+      const val = sanitizeTimeDaysInput(timeInput.value);
+      if (!val) {
+        timeInput.classList.add("invalid");
+        return;
+      }
+      setBlockTimeLimitDays(val);
+      setTimeBlockEnabled(true);
+      if (timePauseToggle) timePauseToggle.checked = true;
+      timeInput.classList.remove("invalid");
+      if (timeTip)
+        timeTip.textContent = `已设置：${val} 天前的帖子将被隐藏（含创建时间解析成功的帖子）。`;
+      applyBlockFilter();
+    };
+
+    if (timeApplyBtn) {
+      timeApplyBtn.addEventListener("click", applyTimeLimit);
+    }
+    if (timeInput) {
+      timeInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") applyTimeLimit();
+      });
+      timeInput.addEventListener("input", () => {
+        timeInput.classList.remove("invalid");
+      });
+    }
+
+    if (timePauseToggle) {
+      timePauseToggle.checked = isTimeBlockEnabled();
+      timePauseToggle.addEventListener("change", () => {
+        setTimeBlockEnabled(timePauseToggle.checked);
+        applyBlockFilter();
+      });
+    }
+    if (timeInput) {
+      const init = getBlockTimeLimitDays();
+      if (init > 0) {
+        timeInput.value = String(init);
+      }
+    }
+    if (timeTip) {
+      const init = getBlockTimeLimitDays();
+      if (init > 0) {
+        const matched = TIME_PRESET_OPTIONS.find((item) => item.value === init);
+        if (matched) timeTip.textContent = `当前：${matched.label}`;
+        else
+          timeTip.textContent = `当前：${init} 天前（手动设置），启用后会隐藏创建时间早于该阈值的帖子。`;
+      } else {
+        timeTip.textContent =
+          "当前未开启时间阈值，或创建时间无法识别；仅对有创建时间元数据的帖子生效。";
+      }
+    }
+    buildTimePresetChips();
+
     function renderUserChips() {
       if (!userChips) return;
       const users = getBlockUsers();
@@ -1089,6 +1255,7 @@
       }
     }
     renderUserChips();
+
     dotBtn.addEventListener("click", () => {
       const s = input.selectionStart ?? input.value.length;
       const e = input.selectionEnd ?? input.value.length;
