@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux.do 帖子过滤脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.6.1
+// @version      1.6.2
 // @description  linuxdo帖子过滤，屏蔽指定用户帖子
 // @author       caolib
 // @match        https://connect.linux.do/*
@@ -33,7 +33,24 @@
       label: "显示帖子创建时间",
       default: false,
     },
+    autoRefresh: {
+      key: "feat_autoRefresh",
+      label: "自动刷新最新话题",
+      default: false,
+    },
   };
+
+  function getAutoRefreshInterval() {
+    if (typeof GM_getValue === "undefined") return 10;
+    const v = GM_getValue("auto_refresh_interval", 10);
+    const n = parseInt(v, 10);
+    return isNaN(n) || n <= 0 ? 10 : n;
+  }
+
+  function isAutoRefreshEnabled() {
+    if (typeof GM_getValue === "undefined") return false;
+    return GM_getValue(FEATURES.autoRefresh.key, FEATURES.autoRefresh.default);
+  }
 
   function isEnabled(feature) {
     if (typeof GM_getValue === "undefined") return FEATURES[feature].default;
@@ -56,7 +73,7 @@
   registerMenus();
 
   if (typeof GM_registerMenuCommand !== "undefined") {
-    GM_registerMenuCommand("🚫 管理屏蔽词", () => showBlockPanel());
+    GM_registerMenuCommand("⚙️ 论坛管理与设置", () => showBlockPanel());
   }
 
   // ========== 配置导入导出 ==========
@@ -64,6 +81,8 @@
     "feat_autoApprove",
     "feat_autoExternal",
     "feat_relativeCreatedAt",
+    "feat_autoRefresh",
+    "auto_refresh_interval",
     "block_words_list",
     "block_words_enabled",
     "block_cat_words_list",
@@ -189,11 +208,13 @@
   const USER_ENABLED_KEY = "block_users_enabled";
   const TIME_LIMIT_DAYS_KEY = "block_time_limit_days";
   const TIME_ENABLED_KEY = "block_time_enabled";
+  const AUTO_REFRESH_ENABLED_KEY = "feat_autoRefresh";
+  const AUTO_REFRESH_INTERVAL_KEY = "auto_refresh_interval";
   const TIME_PRESET_OPTIONS = [
     { label: "7天前", value: 7 },
-    { label: "30天前(1个月)", value: 30 },
-    { label: "90天前(3个月)", value: 90 },
-    { label: "180天前(6个月)", value: 180 },
+    { label: "30天前", value: 30 },
+    { label: "90天前", value: 90 },
+    { label: "180天前", value: 180 },
     { label: "1年前", value: 365 },
     { label: "3年前", value: 1095 },
   ];
@@ -467,7 +488,7 @@
     if (nums[1]) nums[1].textContent = String(catCount);
     if (nums[2]) nums[2].textContent = String(userCount);
     if (nums[3]) nums[3].textContent = String(timeCount);
-    bwState.trigger.title = `屏蔽管理 — 标题:${titleCount} 分类/标签:${catCount} 用户:${userCount} 创建时间:${timeCount}`;
+    bwState.trigger.title = `论坛助手 — 标题屏蔽:${titleCount} 分类屏蔽:${catCount} 用户屏蔽:${userCount} 时间过滤:${timeCount}`;
   }
 
   // --- 实时预览：用输入框草稿匹配示例句子，命中的显示为已屏蔽 ---
@@ -610,11 +631,16 @@
                 border-radius:0 0 10px 10px; border-top:none;
                 box-shadow:0 6px 24px rgba(0,0,0,.5); font-size:13px; }
             #ld-bw-panel .ld-bw-head { display:flex; align-items:center; gap:10px;
-                padding:10px 12px; border-bottom:1px solid #3a3a3a; font-weight:600; color:#e8e8e8; }
-            #ld-bw-panel .ld-bw-title { margin-right:auto; }
-            #ld-bw-panel .ld-bw-pause-label { display:flex; align-items:center; gap:4px; cursor:pointer;
-                font-weight:400; font-size:12px; color:#bbb; }
-            #ld-bw-panel .ld-bw-body { padding:10px 12px; }
+                padding:12px 14px; border-bottom:1px solid #333; font-weight:600; color:#e8e8e8; background:#1a1a1a; }
+            #ld-bw-panel .ld-bw-title { margin-right:auto; font-size:14px; font-weight:700; letter-spacing:0.5px; color:#0088cc; }
+            #ld-bw-panel .ld-bw-ie-btn, #ld-bw-panel .ld-bw-reset-btn { 
+                cursor:pointer; font-size:11px; opacity:.7; padding:4px 8px; border-radius:4px; background:#222; border:1px solid #333; transition:0.2s; }
+            #ld-bw-panel .ld-bw-ie-btn:hover, #ld-bw-panel .ld-bw-reset-btn:hover { opacity:1; background:#333; }
+            #ld-bw-panel .ld-bw-reset-btn { color:#ff6b6b; border-color:#4a2b2b; }
+            #ld-bw-panel .ld-bw-reset-btn:hover { background:#4a2b2b; }
+            #ld-bw-panel .ld-bw-close { cursor:pointer; font-weight:400; font-size:14px; padding:2px 6px; border-radius:4px; transition:0.2s; }
+            #ld-bw-panel .ld-bw-close:hover { background:#333; color:#ff6b6b; }
+            #ld-bw-panel .ld-bw-body { padding:14px; max-height: 480px; overflow-y: auto; }
             #ld-bw-panel .ld-bw-add { display:flex; gap:6px; margin-bottom:8px; align-items:stretch; }
             #ld-bw-panel .ld-bw-add input[type=text],
             #ld-bw-panel .ld-bw-add input[type=number],
@@ -663,14 +689,25 @@
             #ld-bw-panel .ld-bw-add .ld-bw-kw { flex:0 0 auto; padding:0 8px; font-family:Consolas,monospace;
                 font-size:11px; background:#1f3a2d; color:#9cdc9c; border-color:#2a5a3a; border-radius:6px; }
             #ld-bw-panel input[type=text].invalid { border-color:#c0392b; box-shadow:0 0 0 1px #c0392b inset; }
-            #ld-bw-panel .ld-bw-tabs { display:flex; gap:0; border-bottom:1px solid #3a3a3a; }
+            #ld-bw-panel .ld-bw-tabs { display:flex; gap:0; border-bottom:1px solid #3a3a3a; background:#161616; }
             #ld-bw-panel .ld-bw-tab { flex:1; padding:8px 0; text-align:center; cursor:pointer;
                 background:transparent; color:#888; border:none; border-radius:0;
                 border-bottom:2px solid transparent; font-size:13px; font-weight:500; }
             #ld-bw-panel .ld-bw-tab:hover { color:#ccc; }
-            #ld-bw-panel .ld-bw-tab.active { color:#e8e8e8; border-bottom-color:#0088cc; }
+            #ld-bw-panel .ld-bw-tab.active { color:#0088cc; border-bottom-color:#0088cc; background:#1e1e1e; }
             #ld-bw-panel .ld-bw-tab-content { display:none; }
             #ld-bw-panel .ld-bw-tab-content.active { display:block; }
+            
+            /* 美观的 Switch 开关样式 */
+            .ld-switch { position: relative; display: inline-block; width: 36px; height: 20px; }
+            .ld-switch input { opacity: 0; width: 0; height: 0; }
+            .ld-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+                background-color: #444; transition: .3s; border-radius: 20px; }
+            .ld-slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px;
+                background-color: white; transition: .3s; border-radius: 50%; }
+            .ld-switch input:checked + .ld-slider { background-color: #0088cc; }
+            .ld-switch input:checked + .ld-slider:before { transform: translateX(16px); }
+            
             #ld-bw-panel .ld-bw-qi-icon { width:1em; height:1em; vertical-align:middle; margin-right:4px; }
             #ld-bw-panel .ld-bw-chip-icon { width:.85em; height:.85em; vertical-align:middle; margin-right:3px; }
             #ld-bw-panel .ld-bw-cat-warn { display:flex; align-items:flex-start; gap:6px; margin-top:8px; padding:8px 10px;
@@ -756,7 +793,7 @@
     const trigger = document.createElement("button");
     trigger.id = HEADER_TRIGGER_ID;
     trigger.type = "button";
-    trigger.title = "屏蔽管理";
+    trigger.title = "屏蔽管理与设置";
     trigger.innerHTML =
       '<span class="bw-num">0</span><span class="bw-sep">/</span><span class="bw-num">0</span><span class="bw-sep">/</span><span class="bw-num">0</span><span class="bw-sep">/</span><span class="bw-num">0</span>';
 
@@ -764,17 +801,18 @@
     panel.id = "ld-bw-panel";
     panel.innerHTML = `
             <div class="ld-bw-head">
-                <span class="ld-bw-title">屏蔽词管理</span>
-                <span class="ld-bw-ie-btn" title="导入配置" style="cursor:pointer;font-size:12px;opacity:.7;">导入</span>
-                <span class="ld-bw-ie-btn" title="导出配置" style="cursor:pointer;font-size:12px;opacity:.7;">导出</span>
-                <span class="ld-bw-reset-btn" title="重置所有设置" style="cursor:pointer;font-size:12px;opacity:.7;color:#e88;">重置</span>
-                <span class="ld-bw-close" style="cursor:pointer;font-weight:400;">✕</span>
+                <span class="ld-bw-title">论坛助手</span>
+                <span class="ld-bw-ie-btn" title="导入配置">导入</span>
+                <span class="ld-bw-ie-btn" title="导出配置">导出</span>
+                <span class="ld-bw-reset-btn" title="重置所有设置">重置</span>
+                <span class="ld-bw-close">✕</span>
             </div>
             <div class="ld-bw-tabs">
                 <div class="ld-bw-tab active" data-tab="title">标题屏蔽</div>
                 <div class="ld-bw-tab" data-tab="category">分类屏蔽</div>
                 <div class="ld-bw-tab" data-tab="user">用户屏蔽</div>
                 <div class="ld-bw-tab" data-tab="time">时间阈值</div>
+                <div class="ld-bw-tab" data-tab="settings">设置</div>
             </div>
             <div class="ld-bw-body">
                 <div class="ld-bw-tab-content active" data-tab="title">
@@ -825,6 +863,46 @@
                     <div id="ld-bw-time-presets" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;"></div>
                     <div class="ld-bw-time-tip" style="margin:6px 0 10px;color:#999;font-size:12px;line-height:1.4;"></div>
                 </div>
+                <div class="ld-bw-tab-content" data-tab="settings">
+                    <div style="display:flex;flex-direction:column;gap:12px;padding:4px 2px;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;">
+                            <span style="font-weight:500;">自动允许 OAuth 授权</span>
+                            <label class="ld-switch">
+                                <input type="checkbox" id="ld-opt-auto-approve" />
+                                <span class="ld-slider"></span>
+                            </label>
+                        </div>
+                        <div style="display:flex;align-items:center;justify-content:space-between;">
+                            <span style="font-weight:500;">自动跳过外链弹窗</span>
+                            <label class="ld-switch">
+                                <input type="checkbox" id="ld-opt-auto-external" />
+                                <span class="ld-slider"></span>
+                            </label>
+                        </div>
+                        <div style="display:flex;align-items:center;justify-content:space-between;">
+                            <span style="font-weight:500;">显示帖子创建时间</span>
+                            <label class="ld-switch">
+                                <input type="checkbox" id="ld-opt-relative-created" />
+                                <span class="ld-slider"></span>
+                            </label>
+                        </div>
+                        <hr style="border:none;border-top:1px solid #333;margin:4px 0;" />
+                        <div style="display:flex;align-items:center;justify-content:space-between;">
+                            <span style="font-weight:500;">自动点击刷新最新话题</span>
+                            <label class="ld-switch">
+                                <input type="checkbox" id="ld-opt-auto-refresh" />
+                                <span class="ld-slider"></span>
+                            </label>
+                        </div>
+                        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+                            <span style="color:#bbb;font-size:12px;">自动点击间隔时间 (秒)</span>
+                            <input type="number" id="ld-opt-refresh-interval" min="1" max="3600" style="width:70px;padding:4px 6px;background:#2b2b2b;color:#e88;border:1px solid #3a3a3a;border-radius:6px;margin:0;text-align:center;" />
+                        </div>
+                        <div style="font-size:11px;color:#888;line-height:1.4;margin-top:2px;">
+                            * 修改设置后，页面将在保存后自动刷新以应用更改。
+                        </div>
+                    </div>
+                </div>
             </div>
         `;
     document.body.appendChild(panel);
@@ -863,6 +941,10 @@
           }
           if (key === TIME_ENABLED_KEY) {
             GM_setValue(key, false);
+            return;
+          }
+          if (key === "auto_refresh_interval") {
+            GM_setValue(key, 10);
             return;
           }
           if (key.includes("_enabled")) GM_setValue(key, true);
@@ -926,6 +1008,66 @@
           );
       });
     });
+
+    // ========== 设置 Tab 初始化与交互 ==========
+    const optAutoApprove = panel.querySelector("#ld-opt-auto-approve");
+    const optAutoExternal = panel.querySelector("#ld-opt-auto-external");
+    const optRelativeCreated = panel.querySelector("#ld-opt-relative-created");
+    const optAutoRefresh = panel.querySelector("#ld-opt-auto-refresh");
+    const optRefreshInterval = panel.querySelector("#ld-opt-refresh-interval");
+
+    if (optAutoApprove) {
+      optAutoApprove.checked = isEnabled("autoApprove");
+      optAutoApprove.addEventListener("change", () => {
+        if (typeof GM_setValue !== "undefined") {
+          GM_setValue(FEATURES.autoApprove.key, optAutoApprove.checked);
+          alert("设置已保存，刷新页面生效");
+        }
+      });
+    }
+
+    if (optAutoExternal) {
+      optAutoExternal.checked = isEnabled("autoExternal");
+      optAutoExternal.addEventListener("change", () => {
+        if (typeof GM_setValue !== "undefined") {
+          GM_setValue(FEATURES.autoExternal.key, optAutoExternal.checked);
+          alert("设置已保存，刷新页面生效");
+        }
+      });
+    }
+
+    if (optRelativeCreated) {
+      optRelativeCreated.checked = isEnabled("relativeCreatedAt");
+      optRelativeCreated.addEventListener("change", () => {
+        if (typeof GM_setValue !== "undefined") {
+          GM_setValue(FEATURES.relativeCreatedAt.key, optRelativeCreated.checked);
+          alert("设置已保存，刷新页面生效");
+        }
+      });
+    }
+
+    if (optAutoRefresh) {
+      optAutoRefresh.checked = isEnabled("autoRefresh");
+      optAutoRefresh.addEventListener("change", () => {
+        if (typeof GM_setValue !== "undefined") {
+          GM_setValue(FEATURES.autoRefresh.key, optAutoRefresh.checked);
+          alert("设置已保存，刷新页面生效");
+        }
+      });
+    }
+
+    if (optRefreshInterval) {
+      optRefreshInterval.value = getAutoRefreshInterval();
+      optRefreshInterval.addEventListener("change", () => {
+        let val = parseInt(optRefreshInterval.value, 10);
+        if (isNaN(val) || val <= 0) val = 10;
+        optRefreshInterval.value = val;
+        if (typeof GM_setValue !== "undefined") {
+          GM_setValue("auto_refresh_interval", val);
+          alert("设置已保存，刷新页面生效");
+        }
+      });
+    }
 
     // --- 分类屏蔽词逻辑 ---
     const chipIconMeta = {};
@@ -1563,6 +1705,17 @@
     initBlockWords();
     // 显示帖子创建时间（默认关闭）
     if (isEnabled("relativeCreatedAt")) initCreatedAtReplace();
+
+    // ========== 自动点击刷新最新话题 ==========
+    if (isAutoRefreshEnabled()) {
+      const intervalSec = getAutoRefreshInterval();
+      setInterval(() => {
+        const el = document.querySelector('.show-more.has-topics a.alert-info.clickable, .alert.alert-info.clickable');
+        if (el) {
+          el.click();
+        }
+      }, intervalSec * 1000);
+    }
 
     // ========== 用户卡片屏蔽按钮 ==========
     const injectBlockUserBtn = () => {
