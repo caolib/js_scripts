@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux.do 帖子过滤脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.6.2
+// @version      1.6.3
 // @description  linuxdo帖子过滤，屏蔽指定用户帖子
 // @author       caolib
 // @match        https://connect.linux.do/*
@@ -1300,7 +1300,7 @@
         btn.addEventListener("click", () => {
           setBlockTimeLimitDays(item.value);
           timeInput.value = String(item.value);
-          if (timeTip) timeTip.textContent = `已设置为：${item.label}`;
+          if (timeTip) timeTip.textContent = `已设置：隐藏 ${item.label} 的帖子`;
           timeInput.classList.remove("invalid");
           applyBlockFilter();
         });
@@ -1320,7 +1320,7 @@
       if (timePauseToggle) timePauseToggle.checked = true;
       timeInput.classList.remove("invalid");
       if (timeTip)
-        timeTip.textContent = `已设置：${val} 天前的帖子将被隐藏（含创建时间解析成功的帖子）。`;
+        timeTip.textContent = `已设置：隐藏 ${val} 天前的帖子`;
       applyBlockFilter();
     };
 
@@ -1353,12 +1353,10 @@
       const init = getBlockTimeLimitDays();
       if (init > 0) {
         const matched = TIME_PRESET_OPTIONS.find((item) => item.value === init);
-        if (matched) timeTip.textContent = `当前：${matched.label}`;
-        else
-          timeTip.textContent = `当前：${init} 天前（手动设置），启用后会隐藏创建时间早于该阈值的帖子。`;
+        const label = matched ? matched.label : `${init} 天前`;
+        timeTip.textContent = `已设置：隐藏 ${label} 的帖子`;
       } else {
-        timeTip.textContent =
-          "当前未开启时间阈值，或创建时间无法识别；仅对有创建时间元数据的帖子生效。";
+        timeTip.textContent = "未设置时间阈值，请在上方输入天数并应用";
       }
     }
     buildTimePresetChips();
