@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NewAPI 模型广场显示成功率数值
 // @namespace    https://github.com/caolib
-// @version      1.0.1
+// @version      1.0.2
 // @description  在 NewAPI /pricing 模型广场卡片上直接显示成功率数值，替代默认的信号格图标
 // @author       caolib
 // @match        *://*/pricing*
@@ -13,9 +13,70 @@
 (function () {
   'use strict';
 
+  // 开启后，模型卡片没有「成功率」信息或成功率过低就隐藏。
+  let hideCardsBySuccessRate = true;
+  const MODEL_CARD_SELECTOR = 'main div.rounded-xl';
+  const MIN_SUCCESS_RATE = 70;
+
   // 仅处理带「成功率」title 的状态容器，无则不注入，避免误伤非 NewAPI 的 /pricing 页
   const done = new WeakSet();
   let titleStyleInjected = false;
+
+  function getSuccessRate(container) {
+    return (container.getAttribute('title') || '').match(/成功率[:：]\s*([\d.]+)\s*%?/);
+  }
+
+  function getModelCards(root) {
+    const scope = root || document;
+    const cards = [];
+
+    if (scope.closest) {
+      const card = scope.closest(MODEL_CARD_SELECTOR);
+      if (card) cards.push(card);
+    }
+    if (scope.matches && scope.matches(MODEL_CARD_SELECTOR)) cards.push(scope);
+    scope.querySelectorAll(MODEL_CARD_SELECTOR).forEach((card) => cards.push(card));
+
+    return [...new Set(cards)].filter((card) => card.querySelector('h3'));
+  }
+
+  function getCardSuccessRate(card) {
+    const match = [...card.querySelectorAll('div[title^="成功率"]')].map(getSuccessRate).find(Boolean);
+    return match ? parseFloat(match[1]) : null;
+  }
+
+  function getSuccessRateColor(successRate) {
+    if (successRate >= 90) return 'color:#10b981';
+    if (successRate >= 80) return 'color:#eab308';
+    return 'color:#ef4444';
+  }
+
+  function updateToggleButton(button) {
+    button.textContent = hideCardsBySuccessRate ? '成功率≥70%' : '显示全部';
+    button.setAttribute('aria-pressed', hideCardsBySuccessRate ? 'true' : 'false');
+    button.className = hideCardsBySuccessRate
+      ? 'inline-flex h-8 items-center justify-center rounded-lg border bg-primary px-3 text-xs font-medium text-primary-foreground shadow-sm transition-colors'
+      : 'inline-flex h-8 items-center justify-center rounded-lg border bg-background px-3 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground';
+  }
+
+  function ensureToggleButton() {
+    if (document.querySelector('[data-rate-success-filter-toggle="1"]')) return;
+
+    const standardButton = [...document.querySelectorAll('button')].find((button) => button.textContent.trim() === '标准');
+    const modeGroup = standardButton && standardButton.parentElement;
+    if (!modeGroup || ![...modeGroup.querySelectorAll('button')].some((button) => button.textContent.trim() === '充值')) return;
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.rateSuccessFilterToggle = '1';
+    updateToggleButton(button);
+    button.addEventListener('click', () => {
+      hideCardsBySuccessRate = !hideCardsBySuccessRate;
+      updateToggleButton(button);
+      hideCardsWithoutSuccessRate(document);
+    });
+    modeGroup.parentElement.insertBefore(button, modeGroup);
+  }
 
   function ensureTitleStyle() {
     if (titleStyleInjected) return;
@@ -70,37 +131,53 @@
 
   function render(container) {
     if (done.has(container)) return;
-    const m = (container.getAttribute('title') || '').match(/成功率[:：]\s*([\d.]+)\s*%?/);
+    const m = getSuccessRate(container);
     if (!m) return;
     const value = m[1] + '%';
     const iconRow = container.querySelector('.flex.h-4.items-center');
     if (!iconRow) return;
-
-    // 复用站点自身的状态色：最长那根柱子（h-3）的 bg-* 转成 text-*，语义与原信号格一致
-    let color = '';
-    for (const bar of iconRow.querySelectorAll('span')) {
-      if (/h-3(\D|$)/.test(bar.className)) {
-        color = ([...bar.classList].find((c) => c.startsWith('bg-')) || '').replace('bg-', 'text-');
-        break;
-      }
-    }
-    if (!color) {
-      // ponytail: 兜底阈值着色，仅在站点未给出 h-3 指示色时使用
-      const n = parseFloat(m[1]);
-      color = n >= 99 ? 'text-emerald-500' : n >= 95 ? 'text-amber-500' : 'text-red-500';
-    }
+    const color = getSuccessRateColor(parseFloat(m[1]));
 
     iconRow.outerHTML =
       '<div class="flex h-4 items-center justify-end">' +
-      '<span class="font-mono text-[10px] font-semibold leading-4 ' + color + '">' + value + '</span>' +
+      '<span class="font-mono text-[10px] font-semibold leading-4" style="' + color + '">' + value + '</span>' +
       '</div>';
     compactDetailButton(container);
     done.add(container);
   }
 
+  function hideCardsWithoutSuccessRate(root) {
+    if (!hideCardsBySuccessRate) {
+      getModelCards(root).forEach((card) => {
+        if (card.dataset.rateHiddenWithoutSuccessRate === '1') {
+          card.style.display = '';
+          delete card.dataset.rateHiddenWithoutSuccessRate;
+        }
+      });
+      return;
+    }
+    if (!document.querySelector(`${MODEL_CARD_SELECTOR} div[title^="成功率"]`)) return;
+
+    getModelCards(root).forEach((card) => {
+      const successRate = getCardSuccessRate(card);
+      if (successRate !== null && successRate >= MIN_SUCCESS_RATE) {
+        if (card.dataset.rateHiddenWithoutSuccessRate === '1') {
+          card.style.display = '';
+          delete card.dataset.rateHiddenWithoutSuccessRate;
+        }
+        return;
+      }
+
+      card.style.display = 'none';
+      card.dataset.rateHiddenWithoutSuccessRate = '1';
+    });
+  }
+
   function scan(root) {
     ensureTitleStyle();
+    ensureToggleButton();
     (root || document).querySelectorAll('div[title^="成功率"]').forEach(render);
+    hideCardsWithoutSuccessRate(document);
   }
 
   // SPA 动态渲染卡片，监听新增节点
