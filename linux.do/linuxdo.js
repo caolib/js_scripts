@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         Linux.do 帖子过滤脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.6.3
+// @version      1.6.4
 // @description  linuxdo帖子过滤，屏蔽指定用户帖子
 // @author       caolib
 // @match        https://connect.linux.do/*
 // @match        https://linux.do/*
+// @exclude      https://linux.do/u/*/activity/bookmarks
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
@@ -387,6 +388,20 @@
   }
 
   function applyBlockFilter() {
+    // ponytail: 书签页不屏蔽，避免用户自己的收藏被隐藏
+    if (/^\/u\/[^/]+\/activity\/bookmarks/.test(location.pathname)) {
+      document
+        .querySelectorAll("tr.topic-list-item")
+        .forEach((tr) => {
+          tr.style.display = "";
+          delete tr.dataset.blockedTitle;
+          delete tr.dataset.blockedCat;
+          delete tr.dataset.blockedUser;
+          delete tr.dataset.blockedTime;
+        });
+      updateBwStat();
+      return;
+    }
     // --- 标题屏蔽 ---
     const titleEnabled = isBlockEnabled();
     const titleRawWords = titleEnabled
