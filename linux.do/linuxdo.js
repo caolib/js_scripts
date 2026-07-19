@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux.do 帖子过滤脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.7.3
+// @version      1.7.4
 // @description  linuxdo帖子过滤，屏蔽指定用户帖子，自动刷新最新话题
 // @author       caolib
 // @match        https://connect.linux.do/*
@@ -152,9 +152,7 @@
         background: rgba(34, 197, 94, 0.1) !important;
       }
       tr.topic-list-item.ld-fresh {
-        outline: 2px solid #22c55e;
-        outline-offset: -2px;
-        border-radius: 10px;
+        box-shadow: inset 3px 0 0 #22c55e;
       }
       tr.topic-list-item.ld-fresh:hover,
       tr.topic-list-item.ld-fresh:hover td {
