@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux.do 帖子过滤脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.7.4
+// @version      1.7.5
 // @description  linuxdo帖子过滤，屏蔽指定用户帖子，自动刷新最新话题
 // @author       caolib
 // @match        https://connect.linux.do/*
@@ -48,6 +48,8 @@
 
   const AUTO_REFRESH_MIN_COUNT_KEY = "auto_refresh_min_count";
   const FRESH_HIGHLIGHT_MINUTES_KEY = "fresh_highlight_minutes";
+  // 新帖高亮分类条件：空数组=仅时间；非空=时间且分类/标签命中其一
+  const FRESH_HIGHLIGHT_CATS_KEY = "fresh_highlight_cats";
 
   function isAutoRefreshEnabled() {
     if (typeof GM_getValue === "undefined") return false;
@@ -65,6 +67,26 @@
     if (typeof GM_getValue === "undefined") return 10;
     const n = parseInt(GM_getValue(FRESH_HIGHLIGHT_MINUTES_KEY, 10), 10);
     return isNaN(n) || n <= 0 ? 10 : n;
+  }
+
+  function getFreshHighlightCats() {
+    if (typeof GM_getValue === "undefined") return [];
+    const v = GM_getValue(FRESH_HIGHLIGHT_CATS_KEY, []);
+    return Array.isArray(v)
+      ? v.map((x) => String(x).trim()).filter(Boolean)
+      : [];
+  }
+
+  function setFreshHighlightCats(cats) {
+    if (typeof GM_setValue !== "undefined") {
+      GM_setValue(
+        FRESH_HIGHLIGHT_CATS_KEY,
+        (Array.isArray(cats) ? cats : [])
+          .map((x) => String(x).trim())
+          .filter(Boolean),
+      );
+    }
+    if (isEnabled("freshHighlight")) highlightFreshPosts();
   }
 
   function isEnabled(feature) {
@@ -149,14 +171,14 @@
     style.textContent = `
       tr.topic-list-item.ld-fresh,
       tr.topic-list-item.ld-fresh td {
-        background: rgba(34, 197, 94, 0.1) !important;
+        background: rgba(34, 197, 94, 0.05) !important;
       }
       tr.topic-list-item.ld-fresh {
         box-shadow: inset 3px 0 0 #22c55e;
       }
       tr.topic-list-item.ld-fresh:hover,
       tr.topic-list-item.ld-fresh:hover td {
-        background: rgba(34, 197, 94, 0.16) !important;
+        background: rgba(34, 197, 94, 0.09) !important;
       }
     `;
     (document.head || document.documentElement).appendChild(style);
@@ -183,19 +205,61 @@
 
   function getTopicCreatedTs(tr, now = Date.now()) {
     const age = tr.querySelector("td.age");
+    if (!age) return null;
+
+    // 优先用我们注入的创建时间（与界面显示同一数据源）
+    const createdEl = age.querySelector(".ld-created-at");
+    if (createdEl) {
+      const dataTs = parseInt(createdEl.dataset.createdTs || "", 10);
+      if (Number.isFinite(dataTs)) return dataTs;
+      // 回退：按显示文案「N 分钟前 / 刚刚」估时
+      const fromLabel = parseRelativeAgeText(createdEl.textContent, now);
+      if (Number.isFinite(fromLabel)) return fromLabel;
+    }
+
+    // 与「显示创建时间」相同：只读 td.age 的 title 里「创建日期」
     const title =
-      age?.getAttribute("title") ||
-      age?.querySelector(".post-activity")?.getAttribute("title") ||
+      age.getAttribute("title") ||
+      age.querySelector(".post-activity")?.getAttribute("title") ||
       "";
-    let ts = parseCreatedAt(title);
+    const ts = parseCreatedAt(title);
     if (Number.isFinite(ts)) return ts;
-    // title 未就绪时，相对时间通常接近创建时间（新帖）
-    const relText =
-      age?.querySelector(".relative-date")?.textContent ||
-      age?.querySelector(".post-activity")?.textContent ||
-      age?.textContent ||
-      "";
-    return parseRelativeAgeText(relText, now);
+
+    // title 未就绪：不要用活动相对时间（那是最后回复），仅在无活动混淆时估创建
+    // 若已有 .ld-created-at 上面已处理；此处尽量不读 .relative-date（多为活动时间）
+    return null;
+  }
+
+  function getTopicCategoryTexts(tr) {
+    const texts = [];
+    const cat =
+      tr.querySelector(".badge-category__name")?.textContent?.trim() || "";
+    if (cat) texts.push(cat);
+    tr.querySelectorAll(".discourse-tags .discourse-tag").forEach((t) => {
+      const label = (t.textContent || "").trim();
+      const slug = (t.dataset.tagName || "").trim();
+      if (label) texts.push(label);
+      if (slug && slug !== label) texts.push(slug);
+    });
+    return texts;
+  }
+
+  // 分类条件：列表为空则不限制；非空则分类/标签需命中其一（精确匹配）
+  function matchFreshHighlightCats(tr, cats) {
+    if (!cats.length) return true;
+    const texts = getTopicCategoryTexts(tr);
+    if (!texts.length) return false;
+    const set = new Set(cats);
+    return texts.some((t) => set.has(t));
+  }
+
+  // 与 relativeTime 显示对齐：floor(分钟) < 阈值 则高亮
+  // 例：阈值 10 → 「刚刚」~「9 分钟前」高亮，「10 分钟前」不高亮
+  function isCreatedWithinMinutes(diffMs, minutesThreshold) {
+    if (!Number.isFinite(diffMs)) return false;
+    if (diffMs < 0) return true; // 时钟偏差显示为「刚刚」
+    const ageMinutes = Math.floor(diffMs / 60000);
+    return ageMinutes < minutesThreshold;
   }
 
   function highlightFreshPosts() {
@@ -206,19 +270,18 @@
       return;
     }
     injectFreshHighlightStyle();
-    const freshMs = getFreshHighlightMinutes() * 60 * 1000;
+    const freshMinutes = getFreshHighlightMinutes();
+    const cats = getFreshHighlightCats();
     const now = Date.now();
-    // 允许约 1 分钟时钟偏差（服务端时间略快时创建时间会显示「刚刚」）
-    const skewMs = 60 * 1000;
     document.querySelectorAll("tr.topic-list-item").forEach((tr) => {
       const created = getTopicCreatedTs(tr, now);
       if (!Number.isFinite(created)) {
         tr.classList.remove("ld-fresh");
         return;
       }
-      const age = now - created;
-      const fresh = age < freshMs && age > -skewMs;
-      tr.classList.toggle("ld-fresh", fresh);
+      const timeOk = isCreatedWithinMinutes(now - created, freshMinutes);
+      const catOk = matchFreshHighlightCats(tr, cats);
+      tr.classList.toggle("ld-fresh", timeOk && catOk);
     });
   }
 
@@ -330,6 +393,7 @@
     "feat_freshHighlight",
     "auto_refresh_min_count",
     "fresh_highlight_minutes",
+    "fresh_highlight_cats",
     "block_words_list",
     "block_words_enabled",
     "block_cat_words_list",
@@ -996,12 +1060,12 @@
             #ld-bw-panel button { cursor:pointer; border:1px solid #3a3a3a;
                 background:#2b2b2b; color:#e8e8e8; border-radius:6px; padding:6px 10px;
                 box-sizing:border-box; line-height:1; }
-            #ld-bw-chips, #ld-bw-cat-chips, #ld-bw-user-chips { display:flex; flex-wrap:wrap; gap:6px; }
-            #ld-bw-chips .chip, #ld-bw-cat-chips .chip, #ld-bw-user-chips .chip { display:inline-flex; align-items:center; gap:4px; padding:3px 8px;
+            #ld-bw-chips, #ld-bw-cat-chips, #ld-bw-user-chips, #ld-fresh-cat-chips { display:flex; flex-wrap:wrap; gap:6px; }
+            #ld-bw-chips .chip, #ld-bw-cat-chips .chip, #ld-bw-user-chips .chip, #ld-fresh-cat-chips .chip { display:inline-flex; align-items:center; gap:4px; padding:3px 8px;
                 background:#3a3a3a; color:#e8e8e8; border-radius:4px; cursor:pointer; }
-            #ld-bw-chips .chip:hover .chip-label, #ld-bw-cat-chips .chip:hover .chip-label, #ld-bw-user-chips .chip:hover .chip-label { color:#9cdcfe; }
-            #ld-bw-chips .chip-close, #ld-bw-cat-chips .chip-close, #ld-bw-user-chips .chip-close { cursor:pointer; opacity:.6; color:#e8e8e8; }
-            #ld-bw-chips .chip-close:hover, #ld-bw-cat-chips .chip-close:hover, #ld-bw-user-chips .chip-close:hover { opacity:1; }
+            #ld-bw-chips .chip:hover .chip-label, #ld-bw-cat-chips .chip:hover .chip-label, #ld-bw-user-chips .chip:hover .chip-label, #ld-fresh-cat-chips .chip:hover .chip-label { color:#9cdcfe; }
+            #ld-bw-chips .chip-close, #ld-bw-cat-chips .chip-close, #ld-bw-user-chips .chip-close, #ld-fresh-cat-chips .chip-close { cursor:pointer; opacity:.6; color:#e8e8e8; }
+            #ld-bw-chips .chip-close:hover, #ld-bw-cat-chips .chip-close:hover, #ld-bw-user-chips .chip-close:hover, #ld-fresh-cat-chips .chip-close:hover { opacity:1; }
             #ld-bw-chips .chip-count, #ld-bw-cat-chips .chip-count, #ld-bw-user-chips .chip-count { pointer-events:none; user-select:none;
                 min-width:14px; padding:1px 5px; border-radius:999px; background:#2a2a2a; border:1px solid #222;
                 color:#bbb; font-size:11px; line-height:1.2; text-align:center; font-variant-numeric:tabular-nums; }
@@ -1165,7 +1229,7 @@
                 <div class="ld-bw-tab active" data-tab="title">标题屏蔽</div>
                 <div class="ld-bw-tab" data-tab="category">分类屏蔽</div>
                 <div class="ld-bw-tab" data-tab="user">用户屏蔽</div>
-                <div class="ld-bw-tab" data-tab="time">时间阈值</div>
+                <div class="ld-bw-tab" data-tab="time">时间</div>
                 <div class="ld-bw-tab" data-tab="settings">设置</div>
             </div>
             <div class="ld-bw-body">
@@ -1216,6 +1280,32 @@
                     </div>
                     <div id="ld-bw-time-presets" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;"></div>
                     <div class="ld-bw-time-tip" style="margin:6px 0 10px;color:#999;font-size:12px;line-height:1.4;"></div>
+                    <div style="border-top:1px solid #3a3a3a;margin:12px 0 10px;"></div>
+                    <div style="display:flex;flex-direction:column;gap:10px;padding:2px 0;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;">
+                            <span style="font-weight:500;">新帖高亮</span>
+                            <label class="ld-switch">
+                                <input type="checkbox" id="ld-opt-fresh-highlight" />
+                                <span class="ld-slider"></span>
+                            </label>
+                        </div>
+                        <div id="ld-fresh-condition-summary" style="padding:8px 10px;background:#252525;border:1px solid #3a3a3a;border-radius:6px;color:#ccc;font-size:12px;line-height:1.55;"></div>
+                        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+                            <span style="color:#bbb;font-size:12px;">创建时间在</span>
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <input type="number" id="ld-opt-fresh-minutes" min="1" max="10080" style="width:70px;padding:4px 6px;background:#2b2b2b;color:#e88;border:1px solid #3a3a3a;border-radius:6px;margin:0;text-align:center;" />
+                                <span style="color:#bbb;font-size:12px;">分钟之内</span>
+                            </div>
+                        </div>
+                        <div>
+                            <div style="color:#bbb;font-size:12px;margin-bottom:6px;">且含有以下分类/标签（可选，多个为「或」）</div>
+                            <div class="ld-bw-add ld-bw-fresh-cat-add">
+                                <input type="text" id="ld-opt-fresh-cat-input" placeholder="输入分类或标签名，如 搞七捻三" />
+                                <button type="button" id="ld-opt-fresh-cat-add">添加</button>
+                            </div>
+                            <div id="ld-fresh-cat-chips"></div>
+                        </div>
+                    </div>
                 </div>
                 <div class="ld-bw-tab-content" data-tab="settings">
                     <div style="display:flex;flex-direction:column;gap:12px;padding:4px 2px;">
@@ -1237,19 +1327,8 @@
                             <span style="color:#bbb;font-size:12px;">新话题数量阈值（0=立即）</span>
                             <input type="number" id="ld-opt-refresh-min-count" min="0" max="999" style="width:70px;padding:4px 6px;background:#2b2b2b;color:#e88;border:1px solid #3a3a3a;border-radius:6px;margin:0;text-align:center;" />
                         </div>
-                        <div style="display:flex;align-items:center;justify-content:space-between;">
-                            <span style="font-weight:500;">新帖高亮</span>
-                            <label class="ld-switch">
-                                <input type="checkbox" id="ld-opt-fresh-highlight" />
-                                <span class="ld-slider"></span>
-                            </label>
-                        </div>
-                        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
-                            <span style="color:#bbb;font-size:12px;">高亮时间阈值 (分钟)</span>
-                            <input type="number" id="ld-opt-fresh-minutes" min="1" max="10080" style="width:70px;padding:4px 6px;background:#2b2b2b;color:#e88;border:1px solid #3a3a3a;border-radius:6px;margin:0;text-align:center;" />
-                        </div>
                         <div style="font-size:11px;color:#888;line-height:1.4;margin-top:2px;">
-                            * 自动刷新 / 新帖高亮即时生效；创建时间需刷新页面。
+                            * 自动刷新即时生效；创建时间需刷新页面。
                         </div>
                     </div>
                 </div>
@@ -1299,6 +1378,10 @@
           }
           if (key === FRESH_HIGHLIGHT_MINUTES_KEY) {
             GM_setValue(key, 10);
+            return;
+          }
+          if (key === FRESH_HIGHLIGHT_CATS_KEY) {
+            GM_setValue(key, []);
             return;
           }
           if (key.includes("_enabled")) GM_setValue(key, true);
@@ -1406,16 +1489,244 @@
 
     if (optFreshMinutes) {
       optFreshMinutes.value = getFreshHighlightMinutes();
-      optFreshMinutes.addEventListener("change", () => {
+      const onMinutesChange = () => {
         let val = parseInt(optFreshMinutes.value, 10);
         if (isNaN(val) || val <= 0) val = 10;
         optFreshMinutes.value = val;
         setFreshHighlightMinutes(val);
-      });
+        updateFreshHighlightSummary();
+      };
+      optFreshMinutes.addEventListener("change", onMinutesChange);
+      optFreshMinutes.addEventListener("input", updateFreshHighlightSummary);
     }
 
-    // --- 分类屏蔽词逻辑 ---
+    // --- 新帖高亮分类条件（交互对齐分类屏蔽） ---
+    const freshCatInput = panel.querySelector("#ld-opt-fresh-cat-input");
+    const freshCatAddBtn = panel.querySelector("#ld-opt-fresh-cat-add");
+    const freshCatChips = panel.querySelector("#ld-fresh-cat-chips");
+    const freshCatBody = panel.querySelector(
+      '.ld-bw-tab-content[data-tab="time"]',
+    );
+    const freshConditionSummary = panel.querySelector(
+      "#ld-fresh-condition-summary",
+    );
+
+    const SIDEBAR_ITEMS = [
+      { type: "cat", name: "开发调优", icon: "#code", color: "#32c3c3" },
+      { type: "cat", name: "国产替代", icon: "#seedling", color: "#d12c25" },
+      {
+        type: "cat",
+        name: "资源荟萃",
+        icon: "#square-share-nodes",
+        color: "#12a89d",
+      },
+      { type: "cat", name: "网盘资源", icon: "#hard-drive", color: "#16b176" },
+      { type: "cat", name: "文档共建", icon: "#book", color: "#9cb6c4" },
+      { type: "cat", name: "非我莫属", icon: "#briefcase", color: "#a8c6fe" },
+      {
+        type: "cat",
+        name: "读书成诗",
+        icon: "#book-open-reader",
+        color: "#e0d900",
+      },
+      { type: "cat", name: "前沿快讯", icon: "#newspaper", color: "#bb8fce" },
+      { type: "cat", name: "网络记忆", icon: "#rss", color: "#f7941d" },
+      { type: "cat", name: "福利羊毛", icon: "#piggy-bank", color: "#e45735" },
+      { type: "cat", name: "搞七捻三", icon: "#droplet", color: "#3ab54a" },
+      { type: "cat", name: "虫洞广场", icon: "#hurricane", color: "#ff00f7" },
+      { type: "cat", name: "运营反馈", icon: "#comments", color: "#808281" },
+      { type: "tag", name: "人工智能", icon: "#brain", color: "#bd93f9" },
+      { type: "tag", name: "公告", icon: "#bullhorn", color: "#00aeff" },
+      { type: "tag", name: "原创", icon: "#lightbulb", color: "#00aeff" },
+      {
+        type: "tag",
+        name: "快问快答",
+        icon: "#circle-question",
+        color: "#669d34",
+      },
+      { type: "tag", name: "抽奖", icon: "#shuffle", color: "#f7941d" },
+      { type: "tag", name: "精华神帖", icon: "#thumbs-up", color: "#00aeff" },
+      { type: "tag", name: "集中帖", icon: "#people-group", color: "#00aeff" },
+    ];
     const chipIconMeta = {};
+
+    function findSidebarMeta(name) {
+      return chipIconMeta[name] || SIDEBAR_ITEMS.find((it) => it.name === name);
+    }
+
+    function fillChipLabel(label, name) {
+      const meta = findSidebarMeta(name);
+      if (meta && meta.icon) {
+        label.innerHTML = `<svg class="ld-bw-chip-icon" fill="${meta.color}" width=".85em" height=".85em" aria-hidden="true"><use href="${meta.icon}"></use></svg>${name}`;
+      } else {
+        label.textContent = name;
+      }
+    }
+
+    function updateFreshHighlightSummary() {
+      if (!freshConditionSummary) return;
+      const minutes =
+        optFreshMinutes && optFreshMinutes.value
+          ? parseInt(optFreshMinutes.value, 10)
+          : getFreshHighlightMinutes();
+      const mins = isNaN(minutes) || minutes <= 0 ? 10 : minutes;
+      const cats = getFreshHighlightCats();
+      if (!cats.length) {
+        freshConditionSummary.innerHTML = `高亮条件：仅当创建时间在 <b style="color:#e88;">${mins}</b> 分钟之内的帖子会被高亮`;
+        return;
+      }
+      const catText = cats
+        .map((c) => `<b style="color:#7dd3a7;">${escapeHtml(c)}</b>`)
+        .join(" / ");
+      freshConditionSummary.innerHTML = `高亮条件：仅当创建时间在 <b style="color:#e88;">${mins}</b> 分钟之内，且含有 ${catText} 分类/标签的帖子会被高亮`;
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function editFreshCat(name) {
+      if (!freshCatInput) return;
+      const existing = freshCatInput.value.trim();
+      if (existing && existing !== name) {
+        if (!confirm("输入框已有内容，是否用此关键字替换？")) return;
+      }
+      setFreshHighlightCats(getFreshHighlightCats().filter((x) => x !== name));
+      freshCatInput.value = name;
+      freshCatInput.focus();
+      freshCatInput.selectionStart = freshCatInput.selectionEnd =
+        freshCatInput.value.length;
+      renderFreshCatChips();
+    }
+
+    function renderFreshCatChips() {
+      if (!freshCatChips) return;
+      const cats = getFreshHighlightCats();
+      freshCatChips.innerHTML = "";
+      if (!cats.length) {
+        const empty = document.createElement("div");
+        empty.style.cssText = "color:var(--primary-medium,#999);padding:6px 0;";
+        empty.textContent = "未添加（不限制分类/标签）";
+        freshCatChips.appendChild(empty);
+      } else {
+        cats.forEach((name) => {
+          const chip = document.createElement("span");
+          chip.className = "chip";
+          chip.title = "点击编辑";
+          chip.addEventListener("pointerdown", (e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            editFreshCat(name);
+          });
+          const label = document.createElement("span");
+          label.className = "chip-label";
+          fillChipLabel(label, name);
+          const close = document.createElement("span");
+          close.className = "chip-close";
+          close.textContent = "✕";
+          close.title = "移除";
+          close.addEventListener("pointerdown", (e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            e.stopPropagation();
+            setFreshHighlightCats(
+              getFreshHighlightCats().filter((x) => x !== name),
+            );
+            renderFreshCatChips();
+          });
+          chip.appendChild(label);
+          chip.appendChild(close);
+          freshCatChips.appendChild(chip);
+        });
+      }
+      updateFreshHighlightSummary();
+    }
+
+    const addFreshCat = () => {
+      if (!freshCatInput) return;
+      const val = freshCatInput.value.trim();
+      if (!val) return;
+      const cats = getFreshHighlightCats();
+      if (!cats.includes(val)) {
+        cats.push(val);
+        setFreshHighlightCats(cats);
+      }
+      freshCatInput.value = "";
+      renderFreshCatChips();
+      hideFreshCatDropdown();
+    };
+
+    function buildFreshCatDropdown(query) {
+      if (!freshCatBody) return;
+      let dropdown = freshCatBody.querySelector(".ld-bw-fresh-cat-dropdown");
+      if (dropdown) dropdown.remove();
+      const q = query.trim();
+      const selected = getFreshHighlightCats();
+      const matches = SIDEBAR_ITEMS.filter((item) => {
+        if (selected.includes(item.name)) return false;
+        if (!q) return true;
+        return item.name.includes(q);
+      });
+      if (!matches.length) return;
+      dropdown = document.createElement("div");
+      dropdown.className = "ld-bw-cat-dropdown ld-bw-fresh-cat-dropdown";
+      matches.forEach((item) => {
+        const row = document.createElement("div");
+        row.className =
+          "ld-bw-cat-dropdown-item" +
+          (item.type === "cat" ? " is-cat" : " is-tag");
+        row.innerHTML = `<svg class="ld-bw-qi-icon" fill="${item.color}" width="1em" height="1em" aria-hidden="true"><use href="${item.icon}"></use></svg><span>${item.name}</span>`;
+        row.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          const cats = getFreshHighlightCats();
+          if (!cats.includes(item.name)) {
+            cats.push(item.name);
+            setFreshHighlightCats(cats);
+            chipIconMeta[item.name] = { icon: item.icon, color: item.color };
+          }
+          if (freshCatInput) freshCatInput.value = "";
+          renderFreshCatChips();
+          hideFreshCatDropdown();
+        });
+        dropdown.appendChild(row);
+      });
+      // 插在输入区下方，避免被时间 Tab 其它内容挤到最底部
+      const addRow = freshCatBody.querySelector(".ld-bw-fresh-cat-add");
+      if (addRow && addRow.parentNode) {
+        addRow.parentNode.insertBefore(dropdown, addRow.nextSibling);
+      } else {
+        freshCatBody.appendChild(dropdown);
+      }
+    }
+
+    function hideFreshCatDropdown() {
+      if (!freshCatBody) return;
+      const dropdown = freshCatBody.querySelector(".ld-bw-fresh-cat-dropdown");
+      if (dropdown) dropdown.remove();
+    }
+
+    if (freshCatAddBtn) freshCatAddBtn.addEventListener("click", addFreshCat);
+    if (freshCatInput) {
+      freshCatInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") addFreshCat();
+      });
+      freshCatInput.addEventListener("input", () => {
+        buildFreshCatDropdown(freshCatInput.value);
+      });
+      freshCatInput.addEventListener("focus", () =>
+        buildFreshCatDropdown(freshCatInput.value),
+      );
+      freshCatInput.addEventListener("blur", () =>
+        setTimeout(hideFreshCatDropdown, 150),
+      );
+    }
+    renderFreshCatChips();
+
+    // --- 分类屏蔽词逻辑 ---
     const addCatWord = () => {
       const val = catInput.value.trim();
       if (!val) return;
@@ -1490,13 +1801,7 @@
             });
             const label = document.createElement("span");
             label.className = "chip-label";
-            const meta =
-              chipIconMeta[w] || SIDEBAR_ITEMS.find((it) => it.name === w);
-            if (meta && meta.icon) {
-              label.innerHTML = `<svg class="ld-bw-chip-icon" fill="${meta.color}" width=".85em" height=".85em" aria-hidden="true"><use href="${meta.icon}"></use></svg>${w}`;
-            } else {
-              label.textContent = w;
-            }
+            fillChipLabel(label, w);
             const close = document.createElement("span");
             close.className = "chip-close";
             close.textContent = "✕";
@@ -1516,44 +1821,6 @@
           });
       }
     }
-
-    const SIDEBAR_ITEMS = [
-      { type: "cat", name: "开发调优", icon: "#code", color: "#32c3c3" },
-      { type: "cat", name: "国产替代", icon: "#seedling", color: "#d12c25" },
-      {
-        type: "cat",
-        name: "资源荟萃",
-        icon: "#square-share-nodes",
-        color: "#12a89d",
-      },
-      { type: "cat", name: "网盘资源", icon: "#hard-drive", color: "#16b176" },
-      { type: "cat", name: "文档共建", icon: "#book", color: "#9cb6c4" },
-      { type: "cat", name: "非我莫属", icon: "#briefcase", color: "#a8c6fe" },
-      {
-        type: "cat",
-        name: "读书成诗",
-        icon: "#book-open-reader",
-        color: "#e0d900",
-      },
-      { type: "cat", name: "前沿快讯", icon: "#newspaper", color: "#bb8fce" },
-      { type: "cat", name: "网络记忆", icon: "#rss", color: "#f7941d" },
-      { type: "cat", name: "福利羊毛", icon: "#piggy-bank", color: "#e45735" },
-      { type: "cat", name: "搞七捻三", icon: "#droplet", color: "#3ab54a" },
-      { type: "cat", name: "虫洞广场", icon: "#hurricane", color: "#ff00f7" },
-      { type: "cat", name: "运营反馈", icon: "#comments", color: "#808281" },
-      { type: "tag", name: "人工智能", icon: "#brain", color: "#bd93f9" },
-      { type: "tag", name: "公告", icon: "#bullhorn", color: "#00aeff" },
-      { type: "tag", name: "原创", icon: "#lightbulb", color: "#00aeff" },
-      {
-        type: "tag",
-        name: "快问快答",
-        icon: "#circle-question",
-        color: "#669d34",
-      },
-      { type: "tag", name: "抽奖", icon: "#shuffle", color: "#f7941d" },
-      { type: "tag", name: "精华神帖", icon: "#thumbs-up", color: "#00aeff" },
-      { type: "tag", name: "集中帖", icon: "#people-group", color: "#00aeff" },
-    ];
 
     renderCatChips();
 
@@ -1974,24 +2241,34 @@
 
   function replaceActivityWithCreatedAt() {
     document.querySelectorAll("td.age").forEach((td) => {
-      if (td.querySelector(".ld-created-at")) return;
-      const title = td.getAttribute("title");
+      const title =
+        td.getAttribute("title") ||
+        td.querySelector(".post-activity")?.getAttribute("title") ||
+        "";
       if (!title) return;
       const ts = parseCreatedAt(title);
       if (ts === null) return;
       const diff = Date.now() - ts;
-      if (diff < 0) return;
-      const text = relativeTime(diff);
+      if (diff < -60 * 1000) return; // 偏差过大才跳过
+      const text = relativeTime(diff < 0 ? 0 : diff);
       const anchor = td.querySelector(".post-activity");
       if (!anchor) return;
-      const span = document.createElement("span");
-      span.className = "ld-created-at";
+
+      let span = td.querySelector(".ld-created-at");
+      if (!span) {
+        span = document.createElement("span");
+        span.className = "ld-created-at";
+        anchor.appendChild(span);
+      }
+      span.dataset.createdTs = String(ts);
       span.textContent = text;
       span.title = `创建于 ${new Date(ts).toLocaleString("zh-CN")}`;
-      const color = createdAtColor(diff);
+      const color = createdAtColor(diff < 0 ? 0 : diff);
       if (color) span.style.color = color;
-      anchor.appendChild(span);
+      else span.style.color = "";
     });
+    // 创建时间更新后同步高亮（同一套时间源）
+    if (isEnabled("freshHighlight")) highlightFreshPosts();
   }
 
   let createdAtTimer = null;
