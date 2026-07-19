@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux.do 帖子过滤脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.7.1
+// @version      1.7.2
 // @description  linuxdo帖子过滤，屏蔽指定用户帖子，自动刷新最新话题
 // @author       caolib
 // @match        https://connect.linux.do/*
@@ -163,24 +163,25 @@
   }
 
   // 相对文案回退：title 还没挂上时，用「刚刚 / N 分钟前」估创建时间
-  function parseRelativeAgeText(text) {
+  // now 统一传入，避免「刚刚」再取 Date.now() 比外层 now 稍晚导致 age 为负
+  function parseRelativeAgeText(text, now = Date.now()) {
     const t = String(text || "").trim();
     if (!t) return null;
-    if (/^刚刚$|^just now$/i.test(t)) return Date.now();
+    if (/^刚刚$|^just now$/i.test(t)) return now;
     let m = t.match(/^(\d+)\s*秒/);
-    if (m) return Date.now() - +m[1] * 1000;
+    if (m) return now - +m[1] * 1000;
     m = t.match(/^(\d+)\s*分钟/);
-    if (m) return Date.now() - +m[1] * 60 * 1000;
+    if (m) return now - +m[1] * 60 * 1000;
     m = t.match(/^(\d+)\s*小时/);
-    if (m) return Date.now() - +m[1] * 60 * 60 * 1000;
+    if (m) return now - +m[1] * 60 * 60 * 1000;
     m = t.match(/^(\d+)\s*m(?:in(?:ute)?s?)?\b/i);
-    if (m) return Date.now() - +m[1] * 60 * 1000;
+    if (m) return now - +m[1] * 60 * 1000;
     m = t.match(/^(\d+)\s*h(?:our)?s?\b/i);
-    if (m) return Date.now() - +m[1] * 60 * 60 * 1000;
+    if (m) return now - +m[1] * 60 * 60 * 1000;
     return null;
   }
 
-  function getTopicCreatedTs(tr) {
+  function getTopicCreatedTs(tr, now = Date.now()) {
     const age = tr.querySelector("td.age");
     const title =
       age?.getAttribute("title") ||
@@ -194,7 +195,7 @@
       age?.querySelector(".post-activity")?.textContent ||
       age?.textContent ||
       "";
-    return parseRelativeAgeText(relText);
+    return parseRelativeAgeText(relText, now);
   }
 
   function highlightFreshPosts() {
@@ -207,12 +208,16 @@
     injectFreshHighlightStyle();
     const freshMs = getFreshHighlightMinutes() * 60 * 1000;
     const now = Date.now();
+    // 允许约 1 分钟时钟偏差（服务端时间略快时创建时间会显示「刚刚」）
+    const skewMs = 60 * 1000;
     document.querySelectorAll("tr.topic-list-item").forEach((tr) => {
-      const created = getTopicCreatedTs(tr);
-      const fresh =
-        Number.isFinite(created) &&
-        now - created >= 0 &&
-        now - created < freshMs;
+      const created = getTopicCreatedTs(tr, now);
+      if (!Number.isFinite(created)) {
+        tr.classList.remove("ld-fresh");
+        return;
+      }
+      const age = now - created;
+      const fresh = age < freshMs && age > -skewMs;
       tr.classList.toggle("ld-fresh", fresh);
     });
   }
