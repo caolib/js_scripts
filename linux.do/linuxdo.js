@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Linux.do 帖子过滤脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.6.4
-// @description  linuxdo帖子过滤，屏蔽指定用户帖子
+// @version      1.7.1
+// @description  linuxdo帖子过滤，屏蔽指定用户帖子，自动刷新最新话题
 // @author       caolib
 // @match        https://connect.linux.do/*
 // @match        https://linux.do/*
@@ -39,18 +39,32 @@
       label: "自动刷新最新话题",
       default: false,
     },
+    freshHighlight: {
+      key: "feat_freshHighlight",
+      label: "新帖高亮",
+      default: true,
+    },
   };
 
-  function getAutoRefreshInterval() {
-    if (typeof GM_getValue === "undefined") return 10;
-    const v = GM_getValue("auto_refresh_interval", 10);
-    const n = parseInt(v, 10);
-    return isNaN(n) || n <= 0 ? 10 : n;
-  }
+  const AUTO_REFRESH_MIN_COUNT_KEY = "auto_refresh_min_count";
+  const FRESH_HIGHLIGHT_MINUTES_KEY = "fresh_highlight_minutes";
 
   function isAutoRefreshEnabled() {
     if (typeof GM_getValue === "undefined") return false;
     return GM_getValue(FEATURES.autoRefresh.key, FEATURES.autoRefresh.default);
+  }
+
+  // 新话题数量阈值：0=一出现就点；N=数量>=N 才点
+  function getAutoRefreshMinCount() {
+    if (typeof GM_getValue === "undefined") return 0;
+    const n = parseInt(GM_getValue(AUTO_REFRESH_MIN_COUNT_KEY, 0), 10);
+    return isNaN(n) || n < 0 ? 0 : n;
+  }
+
+  function getFreshHighlightMinutes() {
+    if (typeof GM_getValue === "undefined") return 10;
+    const n = parseInt(GM_getValue(FRESH_HIGHLIGHT_MINUTES_KEY, 10), 10);
+    return isNaN(n) || n <= 0 ? 10 : n;
   }
 
   function isEnabled(feature) {
@@ -58,9 +72,238 @@
     return GM_getValue(FEATURES[feature].key, FEATURES[feature].default);
   }
 
+  // 自动刷新 / 新帖高亮：可热切换，无需刷新页面
+  const NEW_TOPIC_SEL =
+    ".show-more.has-topics a.alert-info.clickable, .alert.alert-info.clickable";
+  let autoRefreshObs = null;
+  let freshHighlightTimer = null;
+  let freshHighlightObs = null;
+  let freshHighlightTick = null;
+
+  function parseNewTopicCount(text) {
+    const m = String(text || "").match(/(\d+)/);
+    return m ? parseInt(m[1], 10) : 0;
+  }
+
+  function tryClickNewTopics() {
+    if (!isAutoRefreshEnabled()) return;
+    const el = document.querySelector(NEW_TOPIC_SEL);
+    if (!el) return;
+    const text = (el.textContent || "").trim();
+    if (!/新的|更新/.test(text) && !el.closest(".show-more.has-topics")) return;
+    const minCount = getAutoRefreshMinCount();
+    if (minCount > 0 && parseNewTopicCount(text) < minCount) return;
+    el.click();
+  }
+
+  function stopAutoRefresh() {
+    if (autoRefreshObs) {
+      autoRefreshObs.disconnect();
+      autoRefreshObs = null;
+    }
+  }
+
+  function startAutoRefresh() {
+    stopAutoRefresh();
+    if (!isAutoRefreshEnabled()) return;
+    const run = () => tryClickNewTopics();
+    run();
+    autoRefreshObs = new MutationObserver(run);
+    if (document.body) {
+      autoRefreshObs.observe(document.body, { childList: true, subtree: true });
+    } else {
+      document.addEventListener(
+        "DOMContentLoaded",
+        () => {
+          if (autoRefreshObs && document.body) {
+            autoRefreshObs.observe(document.body, {
+              childList: true,
+              subtree: true,
+            });
+          }
+        },
+        { once: true },
+      );
+    }
+  }
+
+  function setAutoRefreshEnabled(v) {
+    if (typeof GM_setValue !== "undefined") {
+      GM_setValue(FEATURES.autoRefresh.key, !!v);
+    }
+    if (v) startAutoRefresh();
+    else stopAutoRefresh();
+  }
+
+  function setAutoRefreshMinCount(n) {
+    if (typeof GM_setValue !== "undefined") {
+      GM_setValue(AUTO_REFRESH_MIN_COUNT_KEY, n);
+    }
+    if (isAutoRefreshEnabled()) tryClickNewTopics();
+  }
+
+  function injectFreshHighlightStyle() {
+    if (document.getElementById("ld-fresh-style")) return;
+    const style = document.createElement("style");
+    style.id = "ld-fresh-style";
+    style.textContent = `
+      tr.topic-list-item.ld-fresh,
+      tr.topic-list-item.ld-fresh td {
+        background: rgba(34, 197, 94, 0.12) !important;
+      }
+      tr.topic-list-item.ld-fresh {
+        box-shadow: inset 3px 0 0 #22c55e;
+      }
+      tr.topic-list-item.ld-fresh:hover,
+      tr.topic-list-item.ld-fresh:hover td {
+        background: rgba(34, 197, 94, 0.18) !important;
+      }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  // 相对文案回退：title 还没挂上时，用「刚刚 / N 分钟前」估创建时间
+  function parseRelativeAgeText(text) {
+    const t = String(text || "").trim();
+    if (!t) return null;
+    if (/^刚刚$|^just now$/i.test(t)) return Date.now();
+    let m = t.match(/^(\d+)\s*秒/);
+    if (m) return Date.now() - +m[1] * 1000;
+    m = t.match(/^(\d+)\s*分钟/);
+    if (m) return Date.now() - +m[1] * 60 * 1000;
+    m = t.match(/^(\d+)\s*小时/);
+    if (m) return Date.now() - +m[1] * 60 * 60 * 1000;
+    m = t.match(/^(\d+)\s*m(?:in(?:ute)?s?)?\b/i);
+    if (m) return Date.now() - +m[1] * 60 * 1000;
+    m = t.match(/^(\d+)\s*h(?:our)?s?\b/i);
+    if (m) return Date.now() - +m[1] * 60 * 60 * 1000;
+    return null;
+  }
+
+  function getTopicCreatedTs(tr) {
+    const age = tr.querySelector("td.age");
+    const title =
+      age?.getAttribute("title") ||
+      age?.querySelector(".post-activity")?.getAttribute("title") ||
+      "";
+    let ts = parseCreatedAt(title);
+    if (Number.isFinite(ts)) return ts;
+    // title 未就绪时，相对时间通常接近创建时间（新帖）
+    const relText =
+      age?.querySelector(".relative-date")?.textContent ||
+      age?.querySelector(".post-activity")?.textContent ||
+      age?.textContent ||
+      "";
+    return parseRelativeAgeText(relText);
+  }
+
+  function highlightFreshPosts() {
+    if (!isEnabled("freshHighlight")) {
+      document
+        .querySelectorAll("tr.topic-list-item.ld-fresh")
+        .forEach((tr) => tr.classList.remove("ld-fresh"));
+      return;
+    }
+    injectFreshHighlightStyle();
+    const freshMs = getFreshHighlightMinutes() * 60 * 1000;
+    const now = Date.now();
+    document.querySelectorAll("tr.topic-list-item").forEach((tr) => {
+      const created = getTopicCreatedTs(tr);
+      const fresh =
+        Number.isFinite(created) &&
+        now - created >= 0 &&
+        now - created < freshMs;
+      tr.classList.toggle("ld-fresh", fresh);
+    });
+  }
+
+  const freshRetryTimers = [];
+  function scheduleFreshHighlight() {
+    clearTimeout(freshHighlightTimer);
+    freshHighlightTimer = setTimeout(highlightFreshPosts, 50);
+    // 列表刷新后 title 常晚到，补几次
+    freshRetryTimers.forEach(clearTimeout);
+    freshRetryTimers.length = 0;
+    [200, 600, 1500, 3000].forEach((ms) => {
+      freshRetryTimers.push(setTimeout(highlightFreshPosts, ms));
+    });
+  }
+
+  function stopFreshHighlight() {
+    if (freshHighlightTimer) {
+      clearTimeout(freshHighlightTimer);
+      freshHighlightTimer = null;
+    }
+    freshRetryTimers.forEach(clearTimeout);
+    freshRetryTimers.length = 0;
+    if (freshHighlightTick) {
+      clearInterval(freshHighlightTick);
+      freshHighlightTick = null;
+    }
+    if (freshHighlightObs) {
+      freshHighlightObs.disconnect();
+      freshHighlightObs = null;
+    }
+    document
+      .querySelectorAll("tr.topic-list-item.ld-fresh")
+      .forEach((tr) => tr.classList.remove("ld-fresh"));
+  }
+
+  function startFreshHighlight() {
+    stopFreshHighlight();
+    if (!isEnabled("freshHighlight")) return;
+    injectFreshHighlightStyle();
+    highlightFreshPosts();
+    freshHighlightObs = new MutationObserver(scheduleFreshHighlight);
+    if (document.body) {
+      freshHighlightObs.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["title", "class"],
+      });
+    } else {
+      document.addEventListener(
+        "DOMContentLoaded",
+        () => {
+          if (freshHighlightObs && document.body) {
+            freshHighlightObs.observe(document.body, {
+              childList: true,
+              subtree: true,
+              attributes: true,
+              attributeFilter: ["title", "class"],
+            });
+          }
+        },
+        { once: true },
+      );
+    }
+    freshHighlightTick = setInterval(highlightFreshPosts, 15 * 1000);
+  }
+
+  function setFreshHighlightEnabled(v) {
+    if (typeof GM_setValue !== "undefined") {
+      GM_setValue(FEATURES.freshHighlight.key, !!v);
+    }
+    if (v) startFreshHighlight();
+    else stopFreshHighlight();
+  }
+
+  function setFreshHighlightMinutes(n) {
+    if (typeof GM_setValue !== "undefined") {
+      GM_setValue(FRESH_HIGHLIGHT_MINUTES_KEY, n);
+    }
+    if (isEnabled("freshHighlight")) highlightFreshPosts();
+  }
+
+  // OAuth / 外链仅出现在油猴菜单；其余走面板设置
+  const MENU_FEATURES = ["autoApprove", "autoExternal"];
+
   function registerMenus() {
     if (typeof GM_registerMenuCommand === "undefined") return;
-    Object.entries(FEATURES).forEach(([featureKey, cfg]) => {
+    MENU_FEATURES.forEach((featureKey) => {
+      const cfg = FEATURES[featureKey];
+      if (!cfg) return;
       const update = () => {
         const next = !GM_getValue(cfg.key, cfg.default);
         GM_setValue(cfg.key, next);
@@ -73,17 +316,15 @@
 
   registerMenus();
 
-  if (typeof GM_registerMenuCommand !== "undefined") {
-    GM_registerMenuCommand("⚙️ 论坛管理与设置", () => showBlockPanel());
-  }
-
   // ========== 配置导入导出 ==========
   const CONFIG_KEYS = [
     "feat_autoApprove",
     "feat_autoExternal",
     "feat_relativeCreatedAt",
     "feat_autoRefresh",
-    "auto_refresh_interval",
+    "feat_freshHighlight",
+    "auto_refresh_min_count",
+    "fresh_highlight_minutes",
     "block_words_list",
     "block_words_enabled",
     "block_cat_words_list",
@@ -209,8 +450,6 @@
   const USER_ENABLED_KEY = "block_users_enabled";
   const TIME_LIMIT_DAYS_KEY = "block_time_limit_days";
   const TIME_ENABLED_KEY = "block_time_enabled";
-  const AUTO_REFRESH_ENABLED_KEY = "feat_autoRefresh";
-  const AUTO_REFRESH_INTERVAL_KEY = "auto_refresh_interval";
   const TIME_PRESET_OPTIONS = [
     { label: "7天前", value: 7 },
     { label: "30天前", value: 30 },
@@ -219,6 +458,13 @@
     { label: "1年前", value: 365 },
     { label: "3年前", value: 1095 },
   ];
+  function createRuleCounts() {
+    return {
+      title: Object.create(null),
+      category: Object.create(null),
+      user: Object.create(null),
+    };
+  }
   let bwState = {
     trigger: null,
     panel: null,
@@ -234,6 +480,7 @@
     timeInput: null,
     timePresetContainer: null,
     activeTab: "title",
+    ruleCounts: createRuleCounts(),
   };
 
   function getBlockWords() {
@@ -326,6 +573,11 @@
     }
   }
 
+  function testRegex(re, text) {
+    re.lastIndex = 0;
+    return re.test(text);
+  }
+
   // --- 顶部栏徽章入口 ---
   const HEADER_TRIGGER_ID = "ld-bw-trigger";
 
@@ -399,9 +651,11 @@
           delete tr.dataset.blockedUser;
           delete tr.dataset.blockedTime;
         });
+      bwState.ruleCounts = createRuleCounts();
       updateBwStat();
       return;
     }
+    const ruleCounts = createRuleCounts();
     // --- 标题屏蔽 ---
     const titleEnabled = isBlockEnabled();
     const titleRawWords = titleEnabled
@@ -412,8 +666,9 @@
     const titleMatchers = [];
     if (titleEnabled) {
       titleRawWords.forEach((w) => {
+        ruleCounts.title[w] = 0;
         const re = compileRegex(w);
-        if (re) titleMatchers.push(re);
+        if (re) titleMatchers.push({ word: w, re });
       });
     }
 
@@ -427,8 +682,9 @@
     const catMatchers = [];
     if (catEnabled) {
       catRawWords.forEach((w) => {
+        ruleCounts.category[w] = 0;
         const re = compileRegex(w);
-        if (re) catMatchers.push(re);
+        if (re) catMatchers.push({ word: w, re });
       });
     }
 
@@ -436,9 +692,13 @@
     const userEnabled = isUserBlockEnabled();
     const userBlockList = userEnabled
       ? getBlockUsers()
-        .map((u) => u.trim().toLowerCase())
+        .map((u) => u.trim())
         .filter(Boolean)
       : [];
+    const userMatchers = userBlockList.map((word) => {
+      ruleCounts.user[word] = 0;
+      return { word, user: word.toLowerCase() };
+    });
     const timeEnabled = isTimeBlockEnabled();
     const timeLimitDays = timeEnabled ? getBlockTimeLimitDays() : 0;
     const timeLimitMs = timeLimitDays > 0 ? timeLimitDays * 24 * 60 * 60 * 1000 : 0;
@@ -462,14 +722,21 @@
           ? now - createdTs >= timeLimitMs
           : false;
 
-      const titleHit = titleMatchers.some((re) => re.test(title));
-      const catHit = catAndTags.some((text) =>
-        catMatchers.some((re) => re.test(text)),
+      const titleHits = titleMatchers.filter(({ re }) => testRegex(re, title));
+      const catHits = catMatchers.filter(({ re }) =>
+        catAndTags.some((text) => testRegex(re, text)),
       );
-      const userHit = userBlockList.includes(author.toLowerCase());
+      const authorKey = author.toLowerCase();
+      const userHits = userMatchers.filter((item) => item.user === authorKey);
+      const titleHit = titleHits.length > 0;
+      const catHit = catHits.length > 0;
+      const userHit = userHits.length > 0;
       const hit = titleHit || catHit || userHit || timeHit;
 
       if (hit) {
+        titleHits.forEach(({ word }) => ruleCounts.title[word]++);
+        catHits.forEach(({ word }) => ruleCounts.category[word]++);
+        userHits.forEach(({ word }) => ruleCounts.user[word]++);
         tr.style.display = "none";
         if (titleHit) tr.dataset.blockedTitle = "1";
         else delete tr.dataset.blockedTitle;
@@ -487,7 +754,59 @@
         delete tr.dataset.blockedTime;
       }
     });
+    bwState.ruleCounts = ruleCounts;
     updateBwStat();
+  }
+
+  function getRuleCount(kind, value) {
+    return bwState.ruleCounts?.[kind]?.[value] || 0;
+  }
+
+  function setRuleCountBadge(badge, count) {
+    badge.textContent = String(count);
+    badge.title = `当前页面命中 ${count} 个帖子`;
+    badge.hidden = count === 0;
+  }
+
+  function createRuleCountBadge(kind, value) {
+    const badge = document.createElement("span");
+    badge.className = "chip-count";
+    badge.dataset.ruleKind = kind;
+    badge.dataset.ruleValue = value;
+    setRuleCountBadge(badge, getRuleCount(kind, value));
+    return badge;
+  }
+
+  function sortRuleChips(listEl, kind) {
+    if (!listEl) return;
+    const chips = [...listEl.querySelectorAll(".chip")];
+    if (chips.length < 2) return;
+    const sorted = [...chips].sort(
+      (a, b) =>
+        getRuleCount(kind, b.dataset.ruleValue) -
+        getRuleCount(kind, a.dataset.ruleValue),
+    );
+    // 顺序没变就别动 DOM，避免 MutationObserver 刷新时吞掉点击
+    if (sorted.every((chip, i) => chip === chips[i])) return;
+    sorted.forEach((chip) => listEl.appendChild(chip));
+  }
+
+  function updateRuleCountBadges() {
+    if (!bwState.panel) return;
+    // 只更新数字，不重排 DOM——列表页 MutationObserver 很频繁，
+    // 重排会打掉正在进行的点击
+    bwState.panel.querySelectorAll(".chip-count").forEach((badge) => {
+      setRuleCountBadge(
+        badge,
+        getRuleCount(badge.dataset.ruleKind, badge.dataset.ruleValue),
+      );
+    });
+  }
+
+  function sortAllRuleChips() {
+    sortRuleChips(bwState.list, "title");
+    sortRuleChips(bwState.catList, "category");
+    sortRuleChips(bwState.userList, "user");
   }
 
   function updateBwStat() {
@@ -503,7 +822,8 @@
     if (nums[1]) nums[1].textContent = String(catCount);
     if (nums[2]) nums[2].textContent = String(userCount);
     if (nums[3]) nums[3].textContent = String(timeCount);
-    bwState.trigger.title = `论坛助手 — 标题屏蔽:${titleCount} 分类屏蔽:${catCount} 用户屏蔽:${userCount} 时间过滤:${timeCount}`;
+    bwState.trigger.title = `见我想见 — 标题屏蔽:${titleCount} 分类屏蔽:${catCount} 用户屏蔽:${userCount} 时间过滤:${timeCount}`;
+    updateRuleCountBadges();
   }
 
   // --- 实时预览：用输入框草稿匹配示例句子，命中的显示为已屏蔽 ---
@@ -673,11 +993,14 @@
                 box-sizing:border-box; line-height:1; }
             #ld-bw-chips, #ld-bw-cat-chips, #ld-bw-user-chips { display:flex; flex-wrap:wrap; gap:6px; }
             #ld-bw-chips .chip, #ld-bw-cat-chips .chip, #ld-bw-user-chips .chip { display:inline-flex; align-items:center; gap:4px; padding:3px 8px;
-                background:#3a3a3a; color:#e8e8e8; border-radius:4px; }
+                background:#3a3a3a; color:#e8e8e8; border-radius:4px; cursor:pointer; }
+            #ld-bw-chips .chip:hover .chip-label, #ld-bw-cat-chips .chip:hover .chip-label, #ld-bw-user-chips .chip:hover .chip-label { color:#9cdcfe; }
             #ld-bw-chips .chip-close, #ld-bw-cat-chips .chip-close, #ld-bw-user-chips .chip-close { cursor:pointer; opacity:.6; color:#e8e8e8; }
             #ld-bw-chips .chip-close:hover, #ld-bw-cat-chips .chip-close:hover, #ld-bw-user-chips .chip-close:hover { opacity:1; }
-            #ld-bw-chips .chip-label, #ld-bw-cat-chips .chip-label, #ld-bw-user-chips .chip-label { cursor:pointer; }
-            #ld-bw-chips .chip-label:hover, #ld-bw-cat-chips .chip-label:hover, #ld-bw-user-chips .chip-label:hover { color:#9cdcfe; }
+            #ld-bw-chips .chip-count, #ld-bw-cat-chips .chip-count, #ld-bw-user-chips .chip-count { pointer-events:none; user-select:none;
+                min-width:14px; padding:1px 5px; border-radius:999px; background:#2a2a2a; border:1px solid #222;
+                color:#bbb; font-size:11px; line-height:1.2; text-align:center; font-variant-numeric:tabular-nums; }
+            #ld-bw-chips .chip-count[hidden], #ld-bw-cat-chips .chip-count[hidden], #ld-bw-user-chips .chip-count[hidden] { display:none; }
             #ld-bw-foot { display:flex; align-items:center; justify-content:space-between;
                 padding:8px 12px; border-top:1px solid #3a3a3a; font-size:12px; color:#bbb; }
             #ld-bw-panel .ld-bw-toggles { display:flex; gap:12px; }
@@ -776,27 +1099,38 @@
       empty.textContent = "暂无屏蔽词";
       bwState.list.appendChild(empty);
     } else {
-      words.forEach((w) => {
-        const chip = document.createElement("span");
-        chip.className = "chip";
-        const label = document.createElement("span");
-        label.className = "chip-label";
-        label.textContent = w;
-        label.title = "点击编辑";
-        label.addEventListener("click", () => editWord(w));
-        const close = document.createElement("span");
-        close.className = "chip-close";
-        close.textContent = "✕";
-        close.title = "移除";
-        close.addEventListener("click", () => {
-          setBlockWords(getBlockWords().filter((x) => x !== w));
-          renderBwChips();
-          applyBlockFilter();
+      [...words]
+        .sort((a, b) => getRuleCount("title", b) - getRuleCount("title", a))
+        .forEach((w) => {
+          const chip = document.createElement("span");
+          chip.className = "chip";
+          chip.dataset.ruleValue = w;
+          chip.title = "点击编辑";
+          chip.addEventListener("pointerdown", (e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            editWord(w);
+          });
+          const label = document.createElement("span");
+          label.className = "chip-label";
+          label.textContent = w;
+          const close = document.createElement("span");
+          close.className = "chip-close";
+          close.textContent = "✕";
+          close.title = "移除";
+          close.addEventListener("pointerdown", (e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            e.stopPropagation();
+            setBlockWords(getBlockWords().filter((x) => x !== w));
+            renderBwChips();
+            applyBlockFilter();
+          });
+          chip.appendChild(label);
+          chip.appendChild(createRuleCountBadge("title", w));
+          chip.appendChild(close);
+          bwState.list.appendChild(chip);
         });
-        chip.appendChild(label);
-        chip.appendChild(close);
-        bwState.list.appendChild(chip);
-      });
     }
     updateBwStat();
   }
@@ -816,7 +1150,7 @@
     panel.id = "ld-bw-panel";
     panel.innerHTML = `
             <div class="ld-bw-head">
-                <span class="ld-bw-title">论坛助手</span>
+                <span class="ld-bw-title">见我想见</span>
                 <span class="ld-bw-ie-btn" title="导入配置">导入</span>
                 <span class="ld-bw-ie-btn" title="导出配置">导出</span>
                 <span class="ld-bw-reset-btn" title="重置所有设置">重置</span>
@@ -881,40 +1215,36 @@
                 <div class="ld-bw-tab-content" data-tab="settings">
                     <div style="display:flex;flex-direction:column;gap:12px;padding:4px 2px;">
                         <div style="display:flex;align-items:center;justify-content:space-between;">
-                            <span style="font-weight:500;">自动允许 OAuth 授权</span>
-                            <label class="ld-switch">
-                                <input type="checkbox" id="ld-opt-auto-approve" />
-                                <span class="ld-slider"></span>
-                            </label>
-                        </div>
-                        <div style="display:flex;align-items:center;justify-content:space-between;">
-                            <span style="font-weight:500;">自动跳过外链弹窗</span>
-                            <label class="ld-switch">
-                                <input type="checkbox" id="ld-opt-auto-external" />
-                                <span class="ld-slider"></span>
-                            </label>
-                        </div>
-                        <div style="display:flex;align-items:center;justify-content:space-between;">
                             <span style="font-weight:500;">显示帖子创建时间</span>
                             <label class="ld-switch">
                                 <input type="checkbox" id="ld-opt-relative-created" />
                                 <span class="ld-slider"></span>
                             </label>
                         </div>
-                        <hr style="border:none;border-top:1px solid #333;margin:4px 0;" />
                         <div style="display:flex;align-items:center;justify-content:space-between;">
-                            <span style="font-weight:500;">自动点击刷新最新话题</span>
+                            <span style="font-weight:500;">自动刷新最新话题</span>
                             <label class="ld-switch">
                                 <input type="checkbox" id="ld-opt-auto-refresh" />
                                 <span class="ld-slider"></span>
                             </label>
                         </div>
                         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
-                            <span style="color:#bbb;font-size:12px;">自动点击间隔时间 (秒)</span>
-                            <input type="number" id="ld-opt-refresh-interval" min="1" max="3600" style="width:70px;padding:4px 6px;background:#2b2b2b;color:#e88;border:1px solid #3a3a3a;border-radius:6px;margin:0;text-align:center;" />
+                            <span style="color:#bbb;font-size:12px;">新话题数量阈值（0=立即）</span>
+                            <input type="number" id="ld-opt-refresh-min-count" min="0" max="999" style="width:70px;padding:4px 6px;background:#2b2b2b;color:#e88;border:1px solid #3a3a3a;border-radius:6px;margin:0;text-align:center;" />
+                        </div>
+                        <div style="display:flex;align-items:center;justify-content:space-between;">
+                            <span style="font-weight:500;">新帖高亮</span>
+                            <label class="ld-switch">
+                                <input type="checkbox" id="ld-opt-fresh-highlight" />
+                                <span class="ld-slider"></span>
+                            </label>
+                        </div>
+                        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+                            <span style="color:#bbb;font-size:12px;">高亮时间阈值 (分钟)</span>
+                            <input type="number" id="ld-opt-fresh-minutes" min="1" max="10080" style="width:70px;padding:4px 6px;background:#2b2b2b;color:#e88;border:1px solid #3a3a3a;border-radius:6px;margin:0;text-align:center;" />
                         </div>
                         <div style="font-size:11px;color:#888;line-height:1.4;margin-top:2px;">
-                            * 修改设置后，页面将在保存后自动刷新以应用更改。
+                            * 自动刷新 / 新帖高亮即时生效；创建时间需刷新页面。
                         </div>
                     </div>
                 </div>
@@ -958,7 +1288,11 @@
             GM_setValue(key, false);
             return;
           }
-          if (key === "auto_refresh_interval") {
+          if (key === AUTO_REFRESH_MIN_COUNT_KEY) {
+            GM_setValue(key, 0);
+            return;
+          }
+          if (key === FRESH_HIGHLIGHT_MINUTES_KEY) {
             GM_setValue(key, 10);
             return;
           }
@@ -1025,31 +1359,11 @@
     });
 
     // ========== 设置 Tab 初始化与交互 ==========
-    const optAutoApprove = panel.querySelector("#ld-opt-auto-approve");
-    const optAutoExternal = panel.querySelector("#ld-opt-auto-external");
     const optRelativeCreated = panel.querySelector("#ld-opt-relative-created");
     const optAutoRefresh = panel.querySelector("#ld-opt-auto-refresh");
-    const optRefreshInterval = panel.querySelector("#ld-opt-refresh-interval");
-
-    if (optAutoApprove) {
-      optAutoApprove.checked = isEnabled("autoApprove");
-      optAutoApprove.addEventListener("change", () => {
-        if (typeof GM_setValue !== "undefined") {
-          GM_setValue(FEATURES.autoApprove.key, optAutoApprove.checked);
-          alert("设置已保存，刷新页面生效");
-        }
-      });
-    }
-
-    if (optAutoExternal) {
-      optAutoExternal.checked = isEnabled("autoExternal");
-      optAutoExternal.addEventListener("change", () => {
-        if (typeof GM_setValue !== "undefined") {
-          GM_setValue(FEATURES.autoExternal.key, optAutoExternal.checked);
-          alert("设置已保存，刷新页面生效");
-        }
-      });
-    }
+    const optFreshHighlight = panel.querySelector("#ld-opt-fresh-highlight");
+    const optRefreshMinCount = panel.querySelector("#ld-opt-refresh-min-count");
+    const optFreshMinutes = panel.querySelector("#ld-opt-fresh-minutes");
 
     if (optRelativeCreated) {
       optRelativeCreated.checked = isEnabled("relativeCreatedAt");
@@ -1064,23 +1378,34 @@
     if (optAutoRefresh) {
       optAutoRefresh.checked = isEnabled("autoRefresh");
       optAutoRefresh.addEventListener("change", () => {
-        if (typeof GM_setValue !== "undefined") {
-          GM_setValue(FEATURES.autoRefresh.key, optAutoRefresh.checked);
-          alert("设置已保存，刷新页面生效");
-        }
+        setAutoRefreshEnabled(optAutoRefresh.checked);
       });
     }
 
-    if (optRefreshInterval) {
-      optRefreshInterval.value = getAutoRefreshInterval();
-      optRefreshInterval.addEventListener("change", () => {
-        let val = parseInt(optRefreshInterval.value, 10);
+    if (optFreshHighlight) {
+      optFreshHighlight.checked = isEnabled("freshHighlight");
+      optFreshHighlight.addEventListener("change", () => {
+        setFreshHighlightEnabled(optFreshHighlight.checked);
+      });
+    }
+
+    if (optRefreshMinCount) {
+      optRefreshMinCount.value = getAutoRefreshMinCount();
+      optRefreshMinCount.addEventListener("change", () => {
+        let val = parseInt(optRefreshMinCount.value, 10);
+        if (isNaN(val) || val < 0) val = 0;
+        optRefreshMinCount.value = val;
+        setAutoRefreshMinCount(val);
+      });
+    }
+
+    if (optFreshMinutes) {
+      optFreshMinutes.value = getFreshHighlightMinutes();
+      optFreshMinutes.addEventListener("change", () => {
+        let val = parseInt(optFreshMinutes.value, 10);
         if (isNaN(val) || val <= 0) val = 10;
-        optRefreshInterval.value = val;
-        if (typeof GM_setValue !== "undefined") {
-          GM_setValue("auto_refresh_interval", val);
-          alert("设置已保存，刷新页面生效");
-        }
+        optFreshMinutes.value = val;
+        setFreshHighlightMinutes(val);
       });
     }
 
@@ -1143,33 +1468,47 @@
         empty.textContent = "暂无分类/标签屏蔽词";
         catChips.appendChild(empty);
       } else {
-        words.forEach((w) => {
-          const chip = document.createElement("span");
-          chip.className = "chip";
-          const label = document.createElement("span");
-          label.className = "chip-label";
-          const meta =
-            chipIconMeta[w] || SIDEBAR_ITEMS.find((it) => it.name === w);
-          if (meta && meta.icon) {
-            label.innerHTML = `<svg class="ld-bw-chip-icon" fill="${meta.color}" width=".85em" height=".85em" aria-hidden="true"><use href="${meta.icon}"></use></svg>${w}`;
-          } else {
-            label.textContent = w;
-          }
-          label.title = "点击编辑";
-          label.addEventListener("click", () => editCatWord(w));
-          const close = document.createElement("span");
-          close.className = "chip-close";
-          close.textContent = "✕";
-          close.title = "移除";
-          close.addEventListener("click", () => {
-            setCatBlockWords(getCatBlockWords().filter((x) => x !== w));
-            renderCatChips();
-            applyBlockFilter();
+        [...words]
+          .sort(
+            (a, b) =>
+              getRuleCount("category", b) - getRuleCount("category", a),
+          )
+          .forEach((w) => {
+            const chip = document.createElement("span");
+            chip.className = "chip";
+            chip.dataset.ruleValue = w;
+            chip.title = "点击编辑";
+            chip.addEventListener("pointerdown", (e) => {
+              if (e.button !== 0) return;
+              e.preventDefault();
+              editCatWord(w);
+            });
+            const label = document.createElement("span");
+            label.className = "chip-label";
+            const meta =
+              chipIconMeta[w] || SIDEBAR_ITEMS.find((it) => it.name === w);
+            if (meta && meta.icon) {
+              label.innerHTML = `<svg class="ld-bw-chip-icon" fill="${meta.color}" width=".85em" height=".85em" aria-hidden="true"><use href="${meta.icon}"></use></svg>${w}`;
+            } else {
+              label.textContent = w;
+            }
+            const close = document.createElement("span");
+            close.className = "chip-close";
+            close.textContent = "✕";
+            close.title = "移除";
+            close.addEventListener("pointerdown", (e) => {
+              if (e.button !== 0) return;
+              e.preventDefault();
+              e.stopPropagation();
+              setCatBlockWords(getCatBlockWords().filter((x) => x !== w));
+              renderCatChips();
+              applyBlockFilter();
+            });
+            chip.appendChild(label);
+            chip.appendChild(createRuleCountBadge("category", w));
+            chip.appendChild(close);
+            catChips.appendChild(chip);
           });
-          chip.appendChild(label);
-          chip.appendChild(close);
-          catChips.appendChild(chip);
-        });
       }
     }
 
@@ -1386,27 +1725,38 @@
         empty.textContent = "暂无屏蔽用户";
         userChips.appendChild(empty);
       } else {
-        users.forEach((u) => {
-          const chip = document.createElement("span");
-          chip.className = "chip";
-          const label = document.createElement("span");
-          label.className = "chip-label";
-          label.textContent = u;
-          label.title = "点击编辑";
-          label.addEventListener("click", () => editUser(u));
-          const close = document.createElement("span");
-          close.className = "chip-close";
-          close.textContent = "✕";
-          close.title = "移除";
-          close.addEventListener("click", () => {
-            setBlockUsers(getBlockUsers().filter((x) => x !== u));
-            renderUserChips();
-            applyBlockFilter();
+        [...users]
+          .sort((a, b) => getRuleCount("user", b) - getRuleCount("user", a))
+          .forEach((u) => {
+            const chip = document.createElement("span");
+            chip.className = "chip";
+            chip.dataset.ruleValue = u;
+            chip.title = "点击编辑";
+            chip.addEventListener("pointerdown", (e) => {
+              if (e.button !== 0) return;
+              e.preventDefault();
+              editUser(u);
+            });
+            const label = document.createElement("span");
+            label.className = "chip-label";
+            label.textContent = u;
+            const close = document.createElement("span");
+            close.className = "chip-close";
+            close.textContent = "✕";
+            close.title = "移除";
+            close.addEventListener("pointerdown", (e) => {
+              if (e.button !== 0) return;
+              e.preventDefault();
+              e.stopPropagation();
+              setBlockUsers(getBlockUsers().filter((x) => x !== u));
+              renderUserChips();
+              applyBlockFilter();
+            });
+            chip.appendChild(label);
+            chip.appendChild(createRuleCountBadge("user", u));
+            chip.appendChild(close);
+            userChips.appendChild(chip);
           });
-          chip.appendChild(label);
-          chip.appendChild(close);
-          userChips.appendChild(chip);
-        });
       }
     }
     renderUserChips();
@@ -1493,12 +1843,14 @@
     } else {
       positionPanel();
       bwState.panel.style.display = "block";
+      sortAllRuleChips();
     }
   }
   function showBlockPanel() {
     if (bwState.panel) {
       positionPanel();
       bwState.panel.style.display = "block";
+      sortAllRuleChips();
     }
   }
 
@@ -1558,16 +1910,17 @@
   }
 
   function parseCreatedAt(title) {
+    if (!title) return null;
     const cn = title.match(
       /(?:创建日期|Created)[:：]\s*(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日\s*(\d{1,2}):(\d{2})/,
     );
     if (cn) {
       const ts = new Date(
-        parseInt(cn[1]),
-        parseInt(cn[2]) - 1,
-        parseInt(cn[3]),
-        parseInt(cn[4]),
-        parseInt(cn[5]),
+        parseInt(cn[1], 10),
+        parseInt(cn[2], 10) - 1,
+        parseInt(cn[3], 10),
+        parseInt(cn[4], 10),
+        parseInt(cn[5], 10),
       ).getTime();
       if (!isNaN(ts)) return ts;
     }
@@ -1590,17 +1943,25 @@
         dec: 11,
       };
       const mo = months[en[1].toLowerCase()];
-      let h = parseInt(en[4]);
-      const m2 = parseInt(en[5]);
+      let h = parseInt(en[4], 10);
+      const m2 = parseInt(en[5], 10);
       if (en[6].toLowerCase() === "pm" && h !== 12) h += 12;
       else if (en[6].toLowerCase() === "am" && h === 12) h = 0;
       const ts = new Date(
-        parseInt(en[3]),
+        parseInt(en[3], 10),
         mo,
-        parseInt(en[2]),
+        parseInt(en[2], 10),
         h,
         m2,
       ).getTime();
+      if (!isNaN(ts)) return ts;
+    }
+    // ISO / 通用日期回退
+    const iso = title.match(
+      /(?:创建日期|Created)[:：]\s*(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?)/i,
+    );
+    if (iso) {
+      const ts = Date.parse(iso[1].replace(" ", "T"));
       if (!isNaN(ts)) return ts;
     }
     return null;
@@ -1719,16 +2080,9 @@
     // 显示帖子创建时间（默认关闭）
     if (isEnabled("relativeCreatedAt")) initCreatedAtReplace();
 
-    // ========== 自动点击刷新最新话题 ==========
-    if (isAutoRefreshEnabled()) {
-      const intervalSec = getAutoRefreshInterval();
-      setInterval(() => {
-        const el = document.querySelector('.show-more.has-topics a.alert-info.clickable, .alert.alert-info.clickable');
-        if (el) {
-          el.click();
-        }
-      }, intervalSec * 1000);
-    }
+    // 自动刷新最新话题 / 新帖高亮（可热切换）
+    startAutoRefresh();
+    startFreshHighlight();
 
     // ========== 用户卡片屏蔽按钮 ==========
     const injectBlockUserBtn = () => {
