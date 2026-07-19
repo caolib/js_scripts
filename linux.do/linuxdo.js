@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux.do 帖子过滤脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.7.2
+// @version      1.7.3
 // @description  linuxdo帖子过滤，屏蔽指定用户帖子，自动刷新最新话题
 // @author       caolib
 // @match        https://connect.linux.do/*
@@ -149,14 +149,16 @@
     style.textContent = `
       tr.topic-list-item.ld-fresh,
       tr.topic-list-item.ld-fresh td {
-        background: rgba(34, 197, 94, 0.12) !important;
+        background: rgba(34, 197, 94, 0.1) !important;
       }
       tr.topic-list-item.ld-fresh {
-        box-shadow: inset 3px 0 0 #22c55e;
+        outline: 2px solid #22c55e;
+        outline-offset: -2px;
+        border-radius: 10px;
       }
       tr.topic-list-item.ld-fresh:hover,
       tr.topic-list-item.ld-fresh:hover td {
-        background: rgba(34, 197, 94, 0.18) !important;
+        background: rgba(34, 197, 94, 0.16) !important;
       }
     `;
     (document.head || document.documentElement).appendChild(style);
