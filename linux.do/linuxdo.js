@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux.do 帖子过滤脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.7.5
+// @version      1.7.6
 // @description  linuxdo帖子过滤，屏蔽指定用户帖子，自动刷新最新话题
 // @author       caolib
 // @match        https://connect.linux.do/*
@@ -484,11 +484,11 @@
       CONFIG_KEYS.forEach((key) => {
         data[key] = GM_getValue(key, undefined);
       });
-      panel.querySelector("#ld-ie-textarea").value = JSON.stringify(
-        data,
-        null,
-        2,
+      const json = JSON.stringify(data, null, 2).replace(
+        /[\u007f-\uffff]/g,
+        (ch) => "\\u" + ("0000" + ch.charCodeAt(0).toString(16)).slice(-4),
       );
+      panel.querySelector("#ld-ie-textarea").value = json;
       panel.querySelector("#ld-ie-copy-btn").addEventListener("click", () => {
         const json = panel.querySelector("#ld-ie-textarea").value;
         if (
