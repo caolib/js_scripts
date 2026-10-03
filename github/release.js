@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Release 增强显示
 // @namespace    http://tampermonkey.net/
-// @version      2.9.1
+// @version      2.9.3
 // @description  github release 所有文件下载量显示；文件安装包分组、添加平台标签；根据用户当前系统/架构排序，推荐最可能安装的文件；将相对时间替换为精确时间（兼容手机与PC端）；更新日志可手动折叠
 // @author       caolib
 // @match        https://github.com/*
@@ -656,7 +656,7 @@
                 const href = nameLink.getAttribute('href') || '';
                 groupInfo = href.includes('/archive/') ? { id: 'source', showTag: false }
                     : href.includes('/attestations/') ? { id: 'meta', showTag: false }
-                    : parseFileGroup(fileName);
+                        : parseFileGroup(fileName);
                 score = calculateMatchScore(fileName, os, groupInfo.id, arch);
             }
             row.dataset.matchScore = score;
@@ -852,7 +852,8 @@
             };
 
             if (originalUrl) {
-                pushIfNew(`https://ghproxy.net/${originalUrl}`, '镜像');
+                pushIfNew(`https://gh.zwy.one/${originalUrl}`, 'gh.zwy.one');
+                pushIfNew(`https://ghproxy.net/${originalUrl}`, 'ghproxy.net');
             }
 
             // 仅用链接文本作为菜单项名称（如「美国」），完整描述放入 title 供悬停查看
