@@ -1,18 +1,42 @@
 // ==UserScript==
-// @name         AxonHub 顶栏导航 + 置顶按钮（渠道/模型）
+// @name         AxonHub 增强（顶栏导航 / 置顶 / 自动刷新）
 // @namespace    https://github.com/caolib
-// @version      1.3.2
-// @description  在 AxonHub 顶栏添加「渠道 / 模型 / 请求」快捷导航（样式与侧边栏一致、随路由高亮）；并在渠道列表（/channels）、模型列表（/models）的操作列添加置顶按钮，状态持久化保存
-// @match        http://localhost:8090/*
+// @version      1.4.2
+// @description  1) 顶栏添加「渠道 / 模型 / 请求」快捷导航（样式与侧边栏一致、随路由高亮）；2) 渠道列表（/channels）和模型列表（/models）操作列添加置顶按钮，状态持久化保存；3) 请求日志页（/project/requests）自动开启自动刷新（下拉里选 3s 间隔）
+// @author       caolib
+// @include      /^https?:\/\/[^\s\/]*:(8090|18090)(\/|$)/
 // @run-at       document-idle
 // @grant        none
 // @noframes
+// @license      MIT
 // ==/UserScript==
 
 (function () {
   'use strict';
 
-  // ---------- 页面配置（按路径自动切换） ----------
+  // ---------- 作用范围：任意主机名的 8090 / 18090 端口（@include 已过滤，这里再兜一层） ----------
+  const PORTS = ['8090', '18090'];
+  if (!PORTS.includes(location.port)) return;
+
+  // ---------- SPA 路由变化广播（pushState / replaceState / popstate / hashchange） ----------
+  const ROUTE_EVENT = 'axonhub-route-change';
+  function emitRouteChange() {
+    window.dispatchEvent(new Event(ROUTE_EVENT));
+  }
+  function patchHistoryMethod(name) {
+    const original = history[name];
+    history[name] = function (...args) {
+      const result = original.apply(this, args);
+      emitRouteChange();
+      return result;
+    };
+  }
+  patchHistoryMethod('pushState');
+  patchHistoryMethod('replaceState');
+  window.addEventListener('popstate', emitRouteChange);
+  window.addEventListener('hashchange', emitRouteChange);
+
+  // ---------- 置顶：页面配置（按路径自动切换） ----------
   const PAGES = [
     {
       test: (path) => path === '/channels',
@@ -286,6 +310,151 @@
     }
   }
 
+  // ---------- 请求日志自动刷新 ----------
+  // AxonHub 的自动刷新控件（src/components/auto-refresh-control.tsx）不是开关，而是
+  // 「刷新」按钮 + 一个 Radix DropdownMenu，菜单里选 3s/5s/10s/30s/60s。
+  // 选中值存在 localStorage，关闭时写字符串 'closed'，key 见 src/features/requests/index.tsx。
+  const AUTO_REFRESH_PATH = '/project/requests';
+  const AR_STORAGE_KEY = 'requests-auto-refresh-interval-ms';
+  const AR_DEFAULT_INTERVAL = '3000'; // 页面默认值（useAutoRefreshInterval 的 defaultInterval）
+  const AR_TRIGGER_SEL = '[data-testid="auto-refresh-trigger"]';
+  const AR_BUTTON_SEL = '[data-testid="manual-refresh-button"]';
+  const AR_MENU_TIMEOUT = 3000;
+
+  let arObserver = null;
+  let arObserverTimer = null;
+  let arRouteTimer = null;
+  let arMenuTimer = null;
+  let arLastUrl = location.href;
+
+  function isRequestsPage() {
+    return (
+      location.pathname === AUTO_REFRESH_PATH || location.pathname.startsWith(AUTO_REFRESH_PATH + '/')
+    );
+  }
+
+  // 目标间隔：localStorage 里没写过就用页面默认值；显式写成 closed 说明用户主动关了，不碰
+  function arTargetInterval() {
+    try {
+      const stored = localStorage.getItem(AR_STORAGE_KEY);
+      if (stored === null) return AR_DEFAULT_INTERVAL;
+      if (stored === 'closed') return null;
+      return stored;
+    } catch {
+      return AR_DEFAULT_INTERVAL;
+    }
+  }
+
+  function arCloseMenu() {
+    clearTimeout(arMenuTimer);
+    arMenuTimer = null;
+    document.querySelector('[data-testid="auto-refresh-menu"]')?.remove();
+  }
+
+  // 菜单打开后点击目标项；Radix 的菜单项走 click，直接 dispatch 即可
+  function arClickOption(value) {
+    const item = document.querySelector(`[data-testid="auto-refresh-option-${value}"]`);
+    if (!item) return false;
+    arCloseMenu();
+    item.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    return true;
+  }
+
+  // 按钮文案就是当前状态：关闭时是「刷新」，开启时是「3s」这类间隔
+  function arIsEnabled() {
+    const btn = document.querySelector(AR_BUTTON_SEL);
+    if (!btn) return null;
+    return /^\d+s$/.test((btn.textContent || '').trim());
+  }
+
+  function enableAutoRefresh() {
+    if (!isRequestsPage()) {
+      return false;
+    }
+
+    const target = arTargetInterval();
+    if (target === null) {
+      // 用户主动关闭过，不再自动开启
+      return true;
+    }
+
+    // 已经开着（按钮显示 3s 这类文案）就收工，不重复点
+    if (arIsEnabled() === true) return true;
+
+    const trigger = document.querySelector(AR_TRIGGER_SEL);
+    if (!trigger) return false;
+
+    // 万一上一次菜单没关干净
+    arCloseMenu();
+    trigger.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }));
+    // 菜单是 portal 异步渲染的，下一帧再点选项
+    arMenuTimer = setTimeout(() => {
+      if (!arClickOption(target)) arCloseMenu();
+    }, 120);
+    return true;
+  }
+
+  function arDisconnectObserver() {
+    if (arObserver) {
+      arObserver.disconnect();
+      arObserver = null;
+    }
+    if (arObserverTimer) {
+      clearTimeout(arObserverTimer);
+      arObserverTimer = null;
+    }
+  }
+
+  // 控件出现前一直等 DOM 变化；开启一次后就断开，之后用户手动关掉不再抢回来
+  function arTryEnable() {
+    arDisconnectObserver();
+
+    if (!isRequestsPage()) return;
+    if (enableAutoRefresh()) return;
+
+    if (!document.body) {
+      arRouteTimer = setTimeout(arTryEnable, 50);
+      return;
+    }
+
+    arObserver = new MutationObserver(() => {
+      if (enableAutoRefresh()) {
+        arDisconnectObserver();
+      }
+    });
+    arObserver.observe(document.body, { childList: true, subtree: true });
+    arObserverTimer = setTimeout(arDisconnectObserver, 10000);
+  }
+
+  function arSchedule() {
+    clearTimeout(arRouteTimer);
+    arRouteTimer = setTimeout(arTryEnable, 0);
+  }
+
+  function onAutoRefreshRouteChange() {
+    if (location.href === arLastUrl) {
+      return;
+    }
+    arLastUrl = location.href;
+    if (isRequestsPage()) {
+      arSchedule();
+    } else {
+      arDisconnectObserver();
+    }
+  }
+
+  function initAutoRefresh() {
+    if (document.readyState === 'loading') {
+      window.addEventListener('DOMContentLoaded', arSchedule, { once: true });
+    } else {
+      arSchedule();
+    }
+  }
+
+  window.addEventListener(ROUTE_EVENT, onAutoRefreshRouteChange);
+  // 顶栏高亮不等 MutationObserver 的防抖，路由一变就刷
+  window.addEventListener(ROUTE_EVENT, ensureHeaderNav);
+
   // ---------- 监听 React 重渲染（翻页、开关切换、筛选、SPA 路由切换等） ----------
   let timer = null;
   const observer = new MutationObserver(() => {
@@ -299,4 +468,5 @@
   observer.observe(document.body, { childList: true, subtree: true });
   refresh();
   ensureHeaderNav();
+  initAutoRefresh();
 })();
