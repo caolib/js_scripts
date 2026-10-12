@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         AxonHub 增强（顶栏导航 / 置顶 / 自动刷新）
 // @namespace    https://github.com/caolib
-// @version      1.4.2
-// @description  1) 顶栏添加「渠道 / 模型 / 请求」快捷导航（样式与侧边栏一致、随路由高亮）；2) 渠道列表（/channels）和模型列表（/models）操作列添加置顶按钮，状态持久化保存；3) 请求日志页（/project/requests）自动开启自动刷新（下拉里选 3s 间隔）
+// @version      1.4.4
+// @description  1) 顶栏添加「渠道 / 模型 / 请求」快捷导航（样式与侧边栏一致、随路由高亮）；2) 渠道列表（/channels）和模型列表（/models）操作列添加置顶按钮，状态持久化保存；3) 请求日志页（/project/requests）自动开启自动刷新（下拉里选 5s 间隔）
 // @author       caolib
 // @include      /^https?:\/\/[^\s\/]*:(8090|18090)(\/|$)/
+// @include      https://hub.iikun.de5.net/*
 // @run-at       document-idle
 // @grant        none
 // @noframes
@@ -14,9 +15,10 @@
 (function () {
   'use strict';
 
-  // ---------- 作用范围：任意主机名的 8090 / 18090 端口（@include 已过滤，这里再兜一层） ----------
-  const PORTS = ['8090', '18090'];
-  if (!PORTS.includes(location.port)) return;
+  // ---------- 作用范围：不再限制端口，交给 @include ----------
+  // 原先这里有一道 PORTS 白名单（只允许 8090 / 18090），但 @include 里的域名
+  // （如 hub.iikun.de5.net）走的是标准端口 443，会被这道白名单直接掐掉，
+  // 表现就是「脚本已启用但界面毫无变化」。改为不限制端口，作用范围交给 @include。
 
   // ---------- SPA 路由变化广播（pushState / replaceState / popstate / hashchange） ----------
   const ROUTE_EVENT = 'axonhub-route-change';
@@ -312,11 +314,12 @@
 
   // ---------- 请求日志自动刷新 ----------
   // AxonHub 的自动刷新控件（src/components/auto-refresh-control.tsx）不是开关，而是
-  // 「刷新」按钮 + 一个 Radix DropdownMenu，菜单里选 3s/5s/10s/30s/60s。
+  // 「刷新」按钮 + 一个 Radix DropdownMenu，菜单里选 5s/10s/30s/60s（没有 3s）。
   // 选中值存在 localStorage，关闭时写字符串 'closed'，key 见 src/features/requests/index.tsx。
   const AUTO_REFRESH_PATH = '/project/requests';
   const AR_STORAGE_KEY = 'requests-auto-refresh-interval-ms';
-  const AR_DEFAULT_INTERVAL = '3000'; // 页面默认值（useAutoRefreshInterval 的 defaultInterval）
+  // 最短可用间隔就是 5s，没有 3s；写 3s 会导致菜单里找不到对应选项
+  const AR_DEFAULT_INTERVAL = '5000';
   const AR_TRIGGER_SEL = '[data-testid="auto-refresh-trigger"]';
   const AR_BUTTON_SEL = '[data-testid="manual-refresh-button"]';
   const AR_MENU_TIMEOUT = 3000;
@@ -333,12 +336,15 @@
     );
   }
 
-  // 目标间隔：localStorage 里没写过就用页面默认值；显式写成 closed 说明用户主动关了，不碰
+  // 目标间隔：localStorage 里没写过就用默认值；显式写成 closed 说明用户主动关了，不碰；
+  // 历史上误存过 3s 这类 AxonHub 不支持的间隔，统一抬到最小的 5s
   function arTargetInterval() {
     try {
       const stored = localStorage.getItem(AR_STORAGE_KEY);
       if (stored === null) return AR_DEFAULT_INTERVAL;
       if (stored === 'closed') return null;
+      const n = Number(stored);
+      if (!Number.isFinite(n) || n < Number(AR_DEFAULT_INTERVAL)) return AR_DEFAULT_INTERVAL;
       return stored;
     } catch {
       return AR_DEFAULT_INTERVAL;
@@ -353,14 +359,26 @@
 
   // 菜单打开后点击目标项；Radix 的菜单项走 click，直接 dispatch 即可
   function arClickOption(value) {
-    const item = document.querySelector(`[data-testid="auto-refresh-option-${value}"]`);
+    let item = document.querySelector(`[data-testid="auto-refresh-option-${value}"]`);
+    if (!item) {
+      // 目标间隔在菜单里不存在（比如历史遗留的 3s），退而求其次选最小的可用间隔；
+      // 只挑纯数字的选项，避免误点到「关闭」
+      const opts = Array.from(document.querySelectorAll('[data-testid^="auto-refresh-option-"]')).filter((el) =>
+        /^\d+$/.test((el.getAttribute('data-testid') || '').replace('auto-refresh-option-', ''))
+      );
+      if (opts.length) {
+        const num = (el) => Number((el.getAttribute('data-testid') || '').replace(/\D+/g, '')) || Infinity;
+        opts.sort((a, b) => num(a) - num(b));
+        item = opts[0];
+      }
+    }
     if (!item) return false;
     arCloseMenu();
     item.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
     return true;
   }
 
-  // 按钮文案就是当前状态：关闭时是「刷新」，开启时是「3s」这类间隔
+  // 按钮文案就是当前状态：关闭时是「刷新」，开启时是「5s」这类间隔
   function arIsEnabled() {
     const btn = document.querySelector(AR_BUTTON_SEL);
     if (!btn) return null;
@@ -378,7 +396,7 @@
       return true;
     }
 
-    // 已经开着（按钮显示 3s 这类文案）就收工，不重复点
+    // 已经开着（按钮显示 5s 这类文案）就收工，不重复点
     if (arIsEnabled() === true) return true;
 
     const trigger = document.querySelector(AR_TRIGGER_SEL);
