@@ -1,0 +1,12 @@
+{
+  "name": "github-release-tests",
+  "private": true,
+  "scripts": {
+    "test": "node --test release.test.cjs",
+    "test:browser": "node release.browser.cjs"
+  },
+  "devDependencies": {
+    "jsdom": "27.4.0",
+    "playwright": "1.65.0"
+  }
+}
