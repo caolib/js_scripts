@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux.do 帖子过滤脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.7.6
+// @version      1.7.7
 // @description  linuxdo帖子过滤，屏蔽指定用户帖子，自动刷新最新话题
 // @author       caolib
 // @match        https://connect.linux.do/*
@@ -702,6 +702,10 @@
 
   // 不再需要 getTopicText——标题与分类分别独立匹配
 
+  function isBlockFilterPage() {
+    return /^\/(latest|new|unseen|hot|top)\/?$/.test(location.pathname);
+  }
+
   let bwTimer = null;
   function scheduleApply() {
     clearTimeout(bwTimer);
@@ -709,12 +713,19 @@
   }
 
   function applyBlockFilter() {
-    // ponytail: 书签页不屏蔽，避免用户自己的收藏被隐藏
-    if (/^\/u\/[^/]+\/activity\/bookmarks/.test(location.pathname)) {
+    // 每次执行都检查当前路径，兼容站内路由切换；其它页面恢复被脚本隐藏的帖子
+    if (!isBlockFilterPage()) {
       document
         .querySelectorAll("tr.topic-list-item")
         .forEach((tr) => {
-          tr.style.display = "";
+          if (
+            tr.dataset.blockedTitle ||
+            tr.dataset.blockedCat ||
+            tr.dataset.blockedUser ||
+            tr.dataset.blockedTime
+          ) {
+            tr.style.display = "";
+          }
           delete tr.dataset.blockedTitle;
           delete tr.dataset.blockedCat;
           delete tr.dataset.blockedUser;
@@ -1129,9 +1140,10 @@
             #ld-bw-panel .ld-bw-cat-dropdown-item { display:flex; align-items:center; gap:4px;
                 padding:5px 10px; cursor:pointer; font-size:12px; color:#ccc; }
             #ld-bw-panel .ld-bw-cat-dropdown-item:hover { background:#3a3a3a; color:#e8e8e8; }
-            .ld-created-at { margin-left:4px; font-size:inherit; }
+            .ld-created-at { margin-left:4px; font-size:inherit; white-space:nowrap; }
             .ld-created-at::before { content:'/'; margin-right:4px; color:inherit; }
-            td.age { min-width:180px; }
+            .topic-list td.age { min-width:220px; white-space:nowrap !important; }
+            .topic-list td.age .post-activity { display:inline-flex; align-items:center; white-space:nowrap !important; }
             #ld-bw-panel .ld-bw-quick-item.added { opacity:.4; cursor:default; text-decoration:line-through; }
         `;
     const style = document.createElement("style");
