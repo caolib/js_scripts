@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux.do 帖子过滤脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.7.7
+// @version      1.7.8
 // @description  linuxdo帖子过滤，屏蔽指定用户帖子，自动刷新最新话题
 // @author       caolib
 // @match        https://connect.linux.do/*
@@ -703,7 +703,7 @@
   // 不再需要 getTopicText——标题与分类分别独立匹配
 
   function isBlockFilterPage() {
-    return /^\/(latest|new|unseen|hot|top)\/?$/.test(location.pathname);
+    return /^\/(?:latest|new|unseen|hot|top)?\/?$/.test(location.pathname);
   }
 
   let bwTimer = null;
