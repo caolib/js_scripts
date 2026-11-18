@@ -14,7 +14,7 @@ github/tests/node_modules/.bin/playwright install chromium firefox webkit
 npm --prefix github/tests run test:browser
 ```
 
-测试包含普通 `li`、ARIA 列表、`Box-row` 布局、仓库保存的 GitHub DOM 样本，以及 320px 触屏、动态加载、重排、折叠和代理菜单。浏览器测试执行完整用户脚本，但用本地 HTML 代替网络响应，不加载样本内的外部脚本。
+测试包含普通 `li`、ARIA 列表、`Box-row` 布局、仓库保存的 GitHub DOM 样本，以及 320px 触屏、动态加载、重排、折叠和代理菜单；覆盖 Assets 箭头及键盘切换、Android/iOS 独立配色、系统 SVG 图标和链接变更后原图标恢复。浏览器测试执行完整用户脚本，检查亮/暗主题下行、标签、文件名与图标配色一致，并保存截图；用本地 HTML 代替网络响应，不加载样本内的外部脚本。
 
 可选的真实 GitHub 页面检查（Git Bash）：
 

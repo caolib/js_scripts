@@ -98,6 +98,11 @@ for (const [name, expected] of [
     ['tool-win-x64.exe.bsdiff', 'windows'],
     ['tool.pkg.tar.zst', 'linux-arch'],
     ['tool-win-x64.exe.sha512', 'meta'],
+    ['latest-mac.yml', 'meta'],
+    ['latest-linux.yaml', 'meta'],
+    ['tool-windows-x64.YML', 'meta'],
+    ['tool-android.yml', 'meta'],
+    ['tool-ios.yaml', 'meta'],
 ]) {
     test(`file group: ${name}`, t => assert.equal(load(t).releaseTest.parseFileGroup(name).id, expected));
 }
@@ -143,8 +148,112 @@ for (const number of ['', '2', '3']) {
             assert.equal(container.closest('.d-sm-none, .d-md-none'), null);
         });
         assert.equal(details.querySelector('.gh-meta-files-wrapper') !== null, number === '3');
+        const platformIcons = details.querySelectorAll('.gh-platform-icon');
+        assert.ok(platformIcons.length > 0);
+        platformIcons.forEach(icon => {
+            assert.ok(icon.nextElementSibling.classList.contains('gh-platform-icon-original'));
+        });
+        if (number === '3') assert.ok(details.querySelector('svg.octicon-verified:not(.gh-platform-icon-original)'));
     });
 }
+
+test('scroll-to-top button is a rounded square', t => {
+    const w = load(t);
+    const style = w.getComputedStyle(w.document.querySelector('.gh-scroll-top-btn'));
+    assert.equal(style.width, '40px');
+    assert.equal(style.height, '40px');
+    assert.equal(style.borderRadius, '8px');
+});
+
+test('Assets summary keeps its native disclosure marker layout', t => {
+    const w = load(t, release(row('tool-win-x64.exe')));
+    const summary = w.document.querySelector('#assets > summary');
+    assert.equal(w.getComputedStyle(summary).display, 'list-item');
+    assert.equal(summary.querySelectorAll('.gh-assets-controls').length, 1);
+});
+
+test('Android and iOS use separate row, tag and auxiliary foldout classes', async t => {
+    const w = load(t, release(row('tool-arm64.apk') + row('tool-arm64.ipa') +
+        row('tool-arm64.apk.sha256sum') + row('tool-arm64.ipa.delta')));
+    const details = w.document.querySelector('#assets');
+    for (const [name, platform] of [['tool-arm64.apk', 'android'], ['tool-arm64.ipa', 'ios']]) {
+        const asset = details.querySelector(`[data-file="${name}"]`);
+        assert.ok(asset.classList.contains(`gh-group-${platform}`));
+        assert.ok(asset.querySelector(`.gh-platform-tag.gh-tag-${platform}`));
+        assert.ok(details.querySelector(`.gh-group-aux-wrapper.gh-group-${platform}`));
+    }
+    const apk = details.querySelector('[data-file="tool-arm64.apk"]');
+    apk.querySelector('a').href = '/owner/repo/releases/download/v1/tool-arm64.ipa';
+    await settle();
+    assert.ok(apk.classList.contains('gh-group-ios'));
+    assert.equal(apk.classList.contains('gh-group-android'), false);
+    assert.ok(apk.querySelector('.gh-platform-tag.gh-tag-ios'));
+    assert.equal(details.querySelector('.gh-group-mobile, .gh-tag-mobile'), null);
+});
+
+for (const [name, expected] of [
+    ['tool-win-x64.exe', 'windows'],
+    ['tool-mac-arm64.dmg', 'apple'],
+    ['tool-arm64.ipa', 'apple'],
+    ['tool-arm64.apk', 'android'],
+    ['tool-linux-x64.deb', 'linux'],
+    ['tool-linux-x64.rpm', 'linux'],
+    ['tool-linux-x64.AppImage', 'linux'],
+    ['tool-linux-x64.flatpak', 'linux'],
+    ['tool.pkg.tar.zst', 'linux'],
+    ['tool-linux-x64.tar.gz', 'linux'],
+    ['tool-arm64.apk.sha256sum', 'android'],
+    ['tool-win-x64.exe.sig', null],
+    ['project-source.zip', null],
+    ['release.json', null],
+]) {
+    test(`platform icon: ${name}`, t => {
+        const w = load(t, release(row(name)));
+        const asset = w.document.querySelector('[data-file]');
+        const original = asset.querySelector('svg.octicon-package');
+        const wrapper = original.parentElement;
+        const link = asset.querySelector('a');
+        const icon = asset.querySelector('.gh-platform-icon');
+        if (expected) {
+            assert.equal(icon.dataset.platform, expected);
+            assert.equal(icon.namespaceURI, 'http://www.w3.org/2000/svg');
+            assert.equal(icon.parentElement, wrapper);
+            assert.equal(icon.nextSibling, original);
+            assert.equal(icon.getAttribute('aria-hidden'), 'true');
+            assert.ok(original.classList.contains('gh-platform-icon-original'));
+        } else {
+            assert.equal(icon, null);
+            assert.equal(original.classList.contains('gh-platform-icon-original'), false);
+        }
+        for (let i = 0; i < 3; i++) w.releaseTest.formatAndSortUI(w.document.querySelector('#assets'), true);
+        assert.equal(asset.querySelectorAll('.gh-platform-icon').length, expected ? 1 : 0);
+        assert.equal(asset.querySelector('a'), link);
+        assert.equal(original.parentElement, wrapper);
+    });
+}
+
+test('platform icons update and restore originals when an asset href changes', async t => {
+    const w = load(t, release(row('tool-arm64.apk')));
+    const asset = w.document.querySelector('[data-file]');
+    const original = asset.querySelector('svg.octicon-package');
+    const originalMarkup = original.innerHTML;
+    const icon = asset.querySelector('.gh-platform-icon');
+    const link = asset.querySelector('a');
+    link.href = '/owner/repo/releases/download/v1/tool-arm64.ipa';
+    await settle();
+    assert.equal(asset.querySelector('.gh-platform-icon'), icon);
+    assert.equal(icon.dataset.platform, 'apple');
+    assert.ok(icon.classList.contains('gh-tag-ios'));
+    link.href = '/owner/repo/releases/download/v1/release.json';
+    await settle();
+    assert.equal(asset.querySelector('.gh-platform-icon'), null);
+    assert.equal(original.classList.contains('gh-platform-icon-original'), false);
+    assert.equal(original.innerHTML, originalMarkup);
+    link.href = '/owner/repo/releases/download/v1/tool-win-x64.exe';
+    await settle();
+    assert.equal(asset.querySelector('.gh-platform-icon').dataset.platform, 'windows');
+    assert.equal(original.innerHTML, originalMarkup);
+});
 
 test('grouping is independent of release tag and API', t => {
     const w = load(t, release(row('tool-win-x64.exe'), { summary: '下载文件' }), {}, 'https://github.com/owner/repo/releases');
@@ -335,5 +444,7 @@ test('disabled grouping stays disabled after dynamic loading', async t => {
     w.document.querySelector('#asset-list').insertAdjacentHTML('beforeend', row('tool-linux-x64.deb'));
     await settle();
     assert.equal(w.document.querySelector('.gh-platform-tag'), null);
+    assert.equal(w.document.querySelector('.gh-platform-icon'), null);
+    assert.equal(w.document.querySelector('.gh-platform-icon-original'), null);
     assert.equal(w.document.querySelector('.gh-os-select'), null);
 });

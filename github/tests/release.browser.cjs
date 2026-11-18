@@ -11,6 +11,9 @@ const baseCSS = `
     ul { margin: 0; padding: 0; list-style: none; }
     [data-file], .Box-row { display: flex; flex-direction: column; padding: 8px; }
     .col-md-6 { display: flex; align-items: center; }
+    .asset-name, .d-flex { display: flex; align-items: center; }
+    .mr-2 { margin-right: 8px; }
+    .Label { display: inline-block; border: 1px solid; border-radius: 999px; padding: 0 6px; }
     .gh-meta-container { margin-right: 8px; }
     .Button { padding: 3px 8px; }
     @media (max-width: 768px) { .d-sm-none, .d-md-none { display: none; } }
@@ -37,7 +40,28 @@ async function checkFixture(browser, engine, opts, mobile) {
     const { context, page, errors } = await fixturePage(browser, html, mobile);
     try {
         await page.waitForSelector('.gh-group-win');
+        const details = page.locator('#assets');
+        const summary = details.locator(':scope > summary');
+        const assertMarker = async () => {
+            const style = await summary.evaluate(el => ({
+                display: getComputedStyle(el).display,
+                marker: getComputedStyle(el, '::marker').content,
+                open: el.parentElement.open,
+            }));
+            assert.equal(style.display, 'list-item');
+            assert.equal(style.marker, style.open ? '"▼ "' : '"▶ "');
+        };
+        await assertMarker();
+        await summary.locator('span').first().click();
+        assert.equal(await details.evaluate(el => el.open), false);
+        await assertMarker();
+        await summary.focus();
+        await page.keyboard.press('Enter');
+        assert.equal(await details.evaluate(el => el.open), true);
+        await assertMarker();
         assert.equal(await page.locator('.gh-platform-tag').count(), 3);
+        assert.equal(await page.locator('.gh-platform-icon').count(), 3);
+        assert.equal(await page.locator('.gh-platform-icon-original').first().isVisible(), false);
         const first = await page.locator('[data-file]').first().getAttribute('data-file');
         assert.equal(first, 'b-win-x64.exe');
         const os = page.locator('.gh-os-select');
@@ -103,8 +127,69 @@ async function checkSavedFixtures(browser, engine) {
     }
 }
 
+async function checkPlatformAppearance(browser, engine, mobile, theme) {
+    const names = ['tool-win-x64.exe', 'tool-mac-arm64.dmg', 'tool-linux-x64.deb',
+        'tool-arm64.apk', 'tool-arm64.ipa', 'release.json'];
+    const styles = theme === 'dark'
+        ? 'body { background: #0d1117; color: #e6edf3; }'
+        : 'body { background: #ffffff; color: #1f2328; --fgColor-success: #1a7f37; --color-success-subtle: rgba(46,160,67,0.1); }';
+    const { context, page, errors } = await fixturePage(browser,
+        `<style>${styles}</style>${release(names.map(name => row(name)).join(''))}`, mobile);
+    try {
+        await page.waitForSelector('.gh-platform-icon');
+        const scrollButtonStyle = await page.locator('.gh-scroll-top-btn').evaluate(el => {
+            const style = getComputedStyle(el);
+            return { width: style.width, height: style.height, radius: style.borderRadius };
+        });
+        assert.deepEqual(scrollButtonStyle, { width: '40px', height: '40px', radius: '8px' });
+        const getAppearance = name => page.locator(`[data-file="${name}"]`).evaluate(el => {
+            const tag = el.querySelector('.gh-platform-tag');
+            const icon = el.querySelector('.gh-platform-icon');
+            const link = el.querySelector('a');
+            return {
+                border: getComputedStyle(el).borderLeftColor,
+                background: getComputedStyle(el).backgroundColor,
+                tagColor: getComputedStyle(tag).color,
+                tagBorder: getComputedStyle(tag).borderColor,
+                linkColor: getComputedStyle(link).color,
+                iconColor: getComputedStyle(icon).color,
+                iconFill: getComputedStyle(icon).fill,
+                platform: icon.dataset.platform,
+            };
+        });
+        const android = await getAppearance('tool-arm64.apk');
+        const ios = await getAppearance('tool-arm64.ipa');
+        assert.equal(android.platform, 'android');
+        assert.equal(ios.platform, 'apple');
+        assert.notEqual(android.border, ios.border);
+        assert.notEqual(android.background, ios.background);
+        for (const appearance of [android, ios]) {
+            for (const key of ['tagColor', 'tagBorder', 'linkColor', 'iconColor', 'iconFill']) {
+                assert.equal(appearance[key], appearance.border, `${key} does not match row color`);
+            }
+        }
+        for (const [name, platform] of [['tool-win-x64.exe', 'windows'], ['tool-mac-arm64.dmg', 'apple'],
+            ['tool-linux-x64.deb', 'linux']]) {
+            const icon = page.locator(`[data-file="${name}"] .gh-platform-icon`);
+            assert.ok(await icon.isVisible());
+            assert.equal(await icon.getAttribute('data-platform'), platform);
+        }
+        assert.equal(await page.locator('[data-file="release.json"] .gh-platform-icon').count(), 0);
+        const details = page.locator('#assets');
+        const summary = details.locator(':scope > summary');
+        assert.equal(await summary.evaluate(el => getComputedStyle(el, '::marker').content), '"▼ "');
+        await page.screenshot({ path: path.join(artifacts, `${engine}-${theme}-${mobile ? 'mobile' : 'desktop'}-platforms.png`), fullPage: true });
+        await summary.locator('span').first().click();
+        assert.equal(await details.evaluate(el => el.open), false);
+        assert.equal(await summary.evaluate(el => getComputedStyle(el, '::marker').content), '"▶ "');
+        assert.deepEqual(errors, []);
+        console.log(`PASS ${engine} ${theme} ${mobile ? '320px touch' : 'desktop'} platform colors and logos`);
+    } finally { await context.close(); }
+}
+
 async function checkLivePage(browser) {
-    const context = await browser.newContext();
+    // 模拟用户脚本管理器注入:仅此临时测试上下文绕过页面 CSP。
+    const context = await browser.newContext({ bypassCSP: true });
     const page = await context.newPage();
     try {
         await page.goto('https://github.com/denoland/deno/releases/tag/v2.8.3', { waitUntil: 'domcontentloaded', timeout: 60000 });
@@ -132,6 +217,9 @@ async function checkLivePage(browser) {
                 for (const mobile of [false, true]) await checkFixture(browser, name, opts, mobile);
             }
             await checkSavedFixtures(browser, name);
+            for (const theme of ['light', 'dark']) {
+                for (const mobile of [false, true]) await checkPlatformAppearance(browser, name, mobile, theme);
+            }
             if (process.env.LIVE_GITHUB === '1' && name === 'chromium') await checkLivePage(browser);
         } finally { await browser.close(); }
     }

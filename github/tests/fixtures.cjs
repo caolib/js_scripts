@@ -14,7 +14,7 @@ if (instrumentedSource === source) throw new Error('Cannot instrument release.js
 function row(name, { tag = 'li', classes = '', role = '', href, renamed = false } = {}) {
     href ||= `/owner/repo/releases/download/v1/${encodeURIComponent(name)}`;
     return `<${tag} ${role ? `role="${role}"` : ''} class="${classes}" data-file="${name}">
-        <div class="asset-name"><a href="${href}"><span>${renamed ? 'Renamed asset' : name}</span></a></div>
+        <div class="asset-name"><span class="d-flex flex-items-start"><svg aria-hidden="true" class="octicon octicon-package color-fg-muted mr-2" width="16" height="16" viewBox="0 0 16 16"><path d="M1 1h14v14H1z"/></svg></span><a href="${href}"><span>${renamed ? 'Renamed asset' : name}</span></a></div>
         <div class="col-md-6"><div class="flex-1 d-sm-none d-md-none">sha256:example</div><span>10 MB</span></div>
     </${tag}>`;
 }

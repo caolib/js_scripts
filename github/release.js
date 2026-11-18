@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         GitHub Release 增强显示
 // @namespace    http://tampermonkey.net/
-// @version      2.10.2
-// @description  github release 所有文件下载量显示；文件安装包分组、添加平台标签；根据用户当前系统/架构排序，推荐最可能安装的文件；将相对时间替换为精确时间（兼容手机与PC端）；更新日志可手动折叠
+// @version      2.10.3
+// @description  github release 所有文件下载量显示；文件安装包分组、添加平台标签与系统图标；根据用户当前系统/架构排序，推荐最可能安装的文件；将相对时间替换为精确时间（兼容手机与PC端）；更新日志可手动折叠
 // @author       caolib
 // @match        https://github.com/*
 // @icon         https://github.githubassets.com/pinned-octocat.svg
@@ -46,90 +46,42 @@
 
     registerMenus();
 
+    // Catppuccin Mocha 官方色板：https://catppuccin.com/palette/（只应用于资源分组）
+    const GROUP_COLORS = {
+        win: '#89b4fa',                  // Blue
+        mac: '#cba6f7',                  // Mauve
+        android: '#a6e3a1',              // Green
+        ios: '#f9e2af',                  // Yellow
+        'linux-rpm': '#f38ba8',          // Red
+        'linux-deb': '#fab387',          // Peach
+        'linux-arch': '#f5c2e7',         // Pink
+        'linux-appimage': '#94e2d5',     // Teal
+        'linux-flatpak': '#b4befe',      // Lavender
+        'linux-other': '#a6adc8',        // Subtext 0
+    };
+
     // --- 注入 CSS 样式 ---
     function injectCSS() {
         if (document.getElementById('gh-release-grouper-css')) return;
         const style = document.createElement('style');
         style.id = 'gh-release-grouper-css';
+        const groupStyles = Object.entries(GROUP_COLORS).map(([group, color]) => {
+            const rgb = [1, 3, 5].map(i => parseInt(color.slice(i, i + 2), 16)).join(', ');
+            return `
+      .gh-group-${group}, .gh-tag-${group} { --gh-group-color: ${color}; }
+      .gh-group-${group} { border-left: 4px solid var(--gh-group-color) !important; background-color: rgba(${rgb}, 0.08) !important; }
+      .gh-group-${group}:hover { background-color: rgba(${rgb}, 0.14) !important; }
+      .gh-group-${group} a[href*="/releases/download/"], .gh-group-${group} a[href*="/archive/"] { color: var(--gh-group-color) !important; }`;
+        }).join('\n');
         style.innerHTML = `
-      .gh-group-win { border-left: 4px solid var(--color-accent-emphasis, #1f6feb) !important; background-color: var(--color-accent-subtle, rgba(56,139,253,0.1)) !important; }
-      .gh-group-win:hover { background-color: var(--color-accent-muted, rgba(56,139,253,0.15)) !important; }
-    .gh-group-win a[href*="/releases/download/"], .gh-group-win a[href*="/archive/"] { color: var(--color-accent-emphasis, #1f6feb) !important; }
-
-      .gh-group-mac { border-left: 4px solid var(--color-done-emphasis, #8957e5) !important; background-color: var(--color-done-subtle, rgba(137,87,229,0.1)) !important; }
-      .gh-group-mac:hover { background-color: var(--color-done-muted, rgba(137,87,229,0.15)) !important; }
-    .gh-group-mac a[href*="/releases/download/"], .gh-group-mac a[href*="/archive/"] { color: var(--color-done-emphasis, #8957e5) !important; }
-
-            .gh-group-mobile { border-left: 4px solid #e3b341 !important; background-color: rgba(227, 179, 65, 0.12) !important; }
-            .gh-group-mobile:hover { background-color: rgba(227, 179, 65, 0.18) !important; }
-        .gh-group-mobile a[href*="/releases/download/"], .gh-group-mobile a[href*="/archive/"] { color: #e3b341 !important; }
-
-      .gh-group-linux-rpm { border-left: 4px solid var(--color-danger-emphasis, #f85149) !important; background-color: var(--color-danger-subtle, rgba(248,81,73,0.1)) !important; }
-      .gh-group-linux-rpm:hover { background-color: var(--color-danger-muted, rgba(248,81,73,0.15)) !important; }
-    .gh-group-linux-rpm a[href*="/releases/download/"], .gh-group-linux-rpm a[href*="/archive/"] { color: var(--color-danger-emphasis, #f85149) !important; }
-
-      .gh-group-linux-deb { border-left: 4px solid var(--color-severe-emphasis, #db6d28) !important; background-color: var(--color-severe-subtle, rgba(219,109,40,0.1)) !important; }
-      .gh-group-linux-deb:hover { background-color: var(--color-severe-muted, rgba(219,109,40,0.15)) !important; }
-    .gh-group-linux-deb a[href*="/releases/download/"], .gh-group-linux-deb a[href*="/archive/"] { color: var(--color-severe-emphasis, #db6d28) !important; }
-
-      .gh-group-linux-arch { border-left: 4px solid var(--color-sponsors-emphasis, #bf4b8a) !important; background-color: var(--color-sponsors-subtle, rgba(191,75,138,0.1)) !important; }
-      .gh-group-linux-arch:hover { background-color: var(--color-sponsors-muted, rgba(191,75,138,0.15)) !important; }
-    .gh-group-linux-arch a[href*="/releases/download/"], .gh-group-linux-arch a[href*="/archive/"] { color: var(--color-sponsors-emphasis, #bf4b8a) !important; }
-
-      .gh-group-linux-appimage { border-left: 4px solid #20c997 !important; background-color: rgba(32, 201, 151, 0.1) !important; }
-      .gh-group-linux-appimage:hover { background-color: rgba(32, 201, 151, 0.15) !important; }
-    .gh-group-linux-appimage a[href*="/releases/download/"], .gh-group-linux-appimage a[href*="/archive/"] { color: #20c997 !important; }
-
-      .gh-group-linux-flatpak { border-left: 4px solid #0abda0 !important; background-color: rgba(10, 189, 160, 0.1) !important; }
-      .gh-group-linux-flatpak:hover { background-color: rgba(10, 189, 160, 0.15) !important; }
-    .gh-group-linux-flatpak a[href*="/releases/download/"], .gh-group-linux-flatpak a[href*="/archive/"] { color: #0abda0 !important; }
-
-      .gh-group-linux-other { border-left: 4px solid var(--color-attention-emphasis, #9e6a03) !important; background-color: var(--color-attention-subtle, rgba(210,153,34,0.1)) !important; }
-      .gh-group-linux-other:hover { background-color: var(--color-attention-muted, rgba(210,153,34,0.15)) !important; }
-    .gh-group-linux-other a[href*="/releases/download/"], .gh-group-linux-other a[href*="/archive/"] { color: var(--color-attention-emphasis, #9e6a03) !important; }
-
+      ${groupStyles}
       .gh-group-other { border-left: 4px solid transparent !important; }
 
-            /* 平台标签颜色与分组主色完全一致（镂空） */
-            .gh-platform-tag {
-                background-color: transparent !important;
-            }
-            .gh-platform-tag.gh-tag-win {
-                color: var(--color-accent-emphasis, #1f6feb) !important;
-                border-color: var(--color-accent-emphasis, #1f6feb) !important;
-            }
-            .gh-platform-tag.gh-tag-mac {
-                color: var(--color-done-emphasis, #8957e5) !important;
-                border-color: var(--color-done-emphasis, #8957e5) !important;
-            }
-            .gh-platform-tag.gh-tag-mobile {
-                color: #e3b341 !important;
-                border-color: #e3b341 !important;
-            }
-            .gh-platform-tag.gh-tag-linux-rpm {
-                color: var(--color-danger-emphasis, #f85149) !important;
-                border-color: var(--color-danger-emphasis, #f85149) !important;
-            }
-            .gh-platform-tag.gh-tag-linux-deb {
-                color: var(--color-severe-emphasis, #db6d28) !important;
-                border-color: var(--color-severe-emphasis, #db6d28) !important;
-            }
-            .gh-platform-tag.gh-tag-linux-arch {
-                color: var(--color-sponsors-emphasis, #bf4b8a) !important;
-                border-color: var(--color-sponsors-emphasis, #bf4b8a) !important;
-            }
-            .gh-platform-tag.gh-tag-linux-appimage {
-                color: #20c997 !important;
-                border-color: #20c997 !important;
-            }
-            .gh-platform-tag.gh-tag-linux-flatpak {
-                color: #0abda0 !important;
-                border-color: #0abda0 !important;
-            }
-            .gh-platform-tag.gh-tag-linux-other {
-                color: var(--color-attention-emphasis, #9e6a03) !important;
-                border-color: var(--color-attention-emphasis, #9e6a03) !important;
-            }
+      /* 平台标签、系统图标与分组共用色板,避免三处颜色不同步。 */
+      .gh-platform-tag { background-color: transparent !important; }
+      .gh-platform-tag, .gh-platform-icon { color: var(--gh-group-color) !important; border-color: var(--gh-group-color) !important; }
+      .gh-platform-icon { flex-shrink: 0; width: 16px; height: 16px; fill: currentColor; }
+      .gh-platform-icon-original { display: none !important; }
 
       /* 第三方代理按钮的下拉菜单样式 */
       .gh-proxy-dropdown { position: relative; display: flex; align-items: center; }
@@ -208,15 +160,17 @@
         color: var(--fgColor-default, var(--color-fg-default, #e6edf3));
       }
 
-      /* 控件独立换行,平台标签不放进窄屏隐藏的 SHA 区域 */
+      /* summary 保留 list-item 才会绘制原生折叠箭头;仅控件内部使用 flex。 */
       .gh-assets-controls { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0 4px 12px; vertical-align: middle; max-width: 100%; }
       .gh-assets-controls > * { margin-left: 0 !important; }
-      .gh-assets-summary { display: flex !important; flex-wrap: wrap; align-items: center; }
+      .gh-assets-summary { display: list-item !important; }
+      .gh-assets-summary::marker { content: "▶ "; }
+      details[open] > .gh-assets-summary::marker { content: "▼ "; }
       .gh-asset-info { flex-wrap: wrap; gap: 4px 0; }
       .gh-meta-container { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
       @media (max-width: 768px) {
         .gh-meta-container { margin-top: 4px; }
-        .gh-assets-controls { margin-left: 0; flex-basis: 100%; }
+        .gh-assets-controls { display: flex; margin-left: 0; }
       }
 
       /* 更新日志手动折叠(默认展开):低调的标题行,非按钮外观 */
@@ -292,7 +246,7 @@
 
       .gh-scroll-top-btn {
         position: fixed; right: 24px; bottom: 24px; z-index: 9999;
-        width: 40px; height: 40px; border-radius: 50%; border: none;
+        width: 40px; height: 40px; border-radius: 8px;
         background-color: var(--button-default-bgColor-rest, var(--color-btn-bg, #21262d));
         border: 1px solid var(--button-default-borderColor-rest, var(--color-btn-border, rgba(240,246,252,0.1)));
         color: var(--button-default-fgColor-rest, var(--color-btn-text, #c9d1d9));
@@ -519,7 +473,8 @@
 
     function parseFileGroup(fileName) {
         let name = fileName.toLowerCase();
-        if (/\.(sig|asc|sha\d+|md5|pem|blockmap)$/.test(name)) return { id: 'meta', showTag: false };
+        // 更新清单/配置文件优先归为元文件,不能由名称中的平台关键词判为安装包。
+        if (/\.(sig|asc|sha\d+|md5|pem|blockmap|ya?ml)$/.test(name)) return { id: 'meta', showTag: false };
         // 衍生文件继承原安装包的平台,但仍在本组折叠。
         if (isAuxiliaryFile(name)) name = name.replace(/\.(sha\d*sum|md5sum|checksums?|sums|bsdiff|delta|patch)$/, '');
 
@@ -552,7 +507,8 @@
         if (groupId === 'linux-appimage') return 'gh-group-linux-appimage';
         if (groupId === 'linux-flatpak') return 'gh-group-linux-flatpak';
         if (groupId.startsWith('linux')) return 'gh-group-linux-other';
-        if (groupId === 'android' || groupId === 'ios') return 'gh-group-mobile';
+        if (groupId === 'android') return 'gh-group-android';
+        if (groupId === 'ios') return 'gh-group-ios';
         return 'gh-group-other';
     }
 
@@ -565,7 +521,8 @@
         if (groupId === 'linux-appimage') return 'gh-tag-linux-appimage';
         if (groupId === 'linux-flatpak') return 'gh-tag-linux-flatpak';
         if (groupId.startsWith('linux')) return 'gh-tag-linux-other';
-        if (groupId === 'android' || groupId === 'ios') return 'gh-tag-mobile';
+        if (groupId === 'android') return 'gh-tag-android';
+        if (groupId === 'ios') return 'gh-tag-ios';
         return '';
     }
 
@@ -715,9 +672,73 @@
         return container;
     }
 
+    /*
+     * 系统 SVG 来自 Bootstrap Icons：https://github.com/twbs/icons/tree/main/icons
+     * The MIT License (MIT)
+     * Copyright (c) 2019-2024 The Bootstrap Authors
+     *
+     * Permission is hereby granted, free of charge, to any person obtaining a copy
+     * of this software and associated documentation files (the "Software"), to deal
+     * in the Software without restriction, including without limitation the rights
+     * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+     * copies of the Software, and to permit persons to whom the Software is
+     * furnished to do so, subject to the following conditions:
+     *
+     * The above copyright notice and this permission notice shall be included in
+     * all copies or substantial portions of the Software.
+     *
+     * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+     * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+     * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+     * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+     * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+     * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+     * THE SOFTWARE.
+     */
+    const PLATFORM_ICONS = {
+        windows: '<path d="M6.555 1.375 0 2.237v5.45h6.555zM0 13.795l6.555.933V8.313H0zm7.278-5.4.026 6.378L16 16V8.395zM16 0 7.33 1.244v6.414H16z"/>',
+        apple: '<path d="M11.182.008C11.148-.03 9.923.023 8.857 1.18c-1.066 1.156-.902 2.482-.878 2.516s1.52.087 2.475-1.258.762-2.391.728-2.43m3.314 11.733c-.048-.096-2.325-1.234-2.113-3.422s1.675-2.789 1.698-2.854-.597-.79-1.254-1.157a3.7 3.7 0 0 0-1.563-.434c-.108-.003-.483-.095-1.254.116-.508.139-1.653.589-1.968.607-.316.018-1.256-.522-2.267-.665-.647-.125-1.333.131-1.824.328-.49.196-1.422.754-2.074 2.237-.652 1.482-.311 3.83-.067 4.56s.625 1.924 1.273 2.796c.576.984 1.34 1.667 1.659 1.899s1.219.386 1.843.067c.502-.308 1.408-.485 1.766-.472.357.013 1.061.154 1.782.539.571.197 1.111.115 1.652-.105.541-.221 1.324-1.059 2.238-2.758q.52-1.185.473-1.282"/>',
+        android: '<path d="m10.213 1.471.691-1.26q.069-.124-.048-.192-.128-.057-.195.058l-.7 1.27A4.8 4.8 0 0 0 8.005.941q-1.032 0-1.956.404l-.7-1.27Q5.281-.037 5.154.02q-.117.069-.049.193l.691 1.259a4.25 4.25 0 0 0-1.673 1.476A3.7 3.7 0 0 0 3.5 5.02h9q0-1.125-.623-2.072a4.27 4.27 0 0 0-1.664-1.476ZM6.22 3.303a.37.37 0 0 1-.267.11.35.35 0 0 1-.263-.11.37.37 0 0 1-.107-.264.37.37 0 0 1 .107-.265.35.35 0 0 1 .263-.11q.155 0 .267.11a.36.36 0 0 1 .112.265.36.36 0 0 1-.112.264m4.101 0a.35.35 0 0 1-.262.11.37.37 0 0 1-.268-.11.36.36 0 0 1-.112-.264q0-.154.112-.265a.37.37 0 0 1 .268-.11q.155 0 .262.11a.37.37 0 0 1 .107.265q0 .153-.107.264M3.5 11.77q0 .441.311.75.311.306.76.307h.758l.01 2.182q0 .414.292.703a.96.96 0 0 0 .7.288.97.97 0 0 0 .71-.288.95.95 0 0 0 .292-.703v-2.182h1.343v2.182q0 .414.292.703a.97.97 0 0 0 .71.288.97.97 0 0 0 .71-.288.95.95 0 0 0 .292-.703v-2.182h.76q.436 0 .749-.308.31-.307.311-.75V5.365h-9zm10.495-6.587a.98.98 0 0 0-.702.278.9.9 0 0 0-.293.685v4.063q0 .406.293.69a.97.97 0 0 0 .702.284q.42 0 .712-.284a.92.92 0 0 0 .293-.69V6.146a.9.9 0 0 0-.293-.685 1 1 0 0 0-.712-.278m-12.702.283a1 1 0 0 1 .712-.283q.41 0 .702.283a.9.9 0 0 1 .293.68v4.063a.93.93 0 0 1-.288.69.97.97 0 0 1-.707.284 1 1 0 0 1-.712-.284.92.92 0 0 1-.293-.69V6.146q0-.396.293-.68"/>',
+        // Bootstrap Tux 实心化:保留企鹅轮廓和眼睛/喙,不再镂空腹部。
+        linux: '<path fill-rule="evenodd" d="M8.446.019c2.521.003 2.38 2.66 2.364 4.093-.01.939.509 1.574 1.04 2.244.474.56 1.095 1.38 1.45 2.32.29.765.402 1.613.115 2.465a.8.8 0 0 1 .254.152l.001.002c.207.175.271.447.329.698.058.252.112.488.224.615.344.382.494.667.48.922-.015.254-.203.43-.435.57-.465.28-1.164.491-1.586 1.002-.443.527-.99.83-1.505.871a1.25 1.25 0 0 1-1.256-.716v-.001a1 1 0 0 1-.078-.21c-.67.038-1.252-.165-1.718-.128-.687.038-1.116.204-1.506.206-.151.331-.445.547-.808.63-.5.114-1.126 0-1.743-.324-.577-.306-1.31-.278-1.85-.39-.27-.057-.51-.157-.626-.384-.116-.226-.095-.538.07-.988.051-.16.012-.398-.026-.648a2.5 2.5 0 0 1-.037-.369c0-.133.022-.265.087-.386v-.002c.14-.266.368-.377.577-.451s.397-.125.53-.258c.143-.15.27-.374.443-.56q.036-.037.073-.07c-.081-.538.007-1.105.192-1.662.393-1.18 1.223-2.314 1.811-3.014.502-.713.65-1.287.701-2.016.042-.997-.705-3.974 2.112-4.2q.168-.015.321-.013Z M6.85 2.45a.48 .62 0 1 0 0 1.24a.48 .62 0 1 0 0-1.24Z M8.8 2.3a.58 .65 0 1 0 0 1.3a.58 .65 0 1 0 0-1.3Z M6.55 4.15 7.7 3.55 9.25 4.18 7.8 4.95Z"/>',
+    };
+
+    function applyPlatformIcon(row) {
+        const groupId = row._groupInfo.id;
+        const platform = groupId.startsWith('linux') ? 'linux'
+            : (groupId === 'mac' || groupId === 'ios') ? 'apple' : groupId;
+        const markup = PLATFORM_ICONS[platform];
+        // 只替换包图标,保留 span.d-flex.flex-items-start 等原有容器和其他图标。
+        const original = row.querySelector('svg.gh-platform-icon-original, svg.octicon-package');
+        let icon = row.querySelector('svg.gh-platform-icon');
+        if (!markup || !original) {
+            icon?.remove();
+            original?.classList.remove('gh-platform-icon-original');
+            return;
+        }
+        if (!icon) {
+            icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            icon.setAttribute('viewBox', '0 0 16 16');
+            icon.setAttribute('width', '16');
+            icon.setAttribute('height', '16');
+            icon.setAttribute('aria-hidden', 'true');
+            icon.setAttribute('focusable', 'false');
+        }
+        const margins = Array.from(original.classList).filter(c => /^(?:tmp-)?mr-/.test(c));
+        icon.setAttribute('class', ['octicon', 'gh-platform-icon', getTagClass(groupId), ...margins].join(' '));
+        if (icon.dataset.platform !== platform) {
+            icon.innerHTML = markup;
+            icon.dataset.platform = platform;
+        }
+        // 原图标仅隐藏不销毁:同一行链接变为源码/未知文件时可以原样恢复。
+        original.classList.add('gh-platform-icon-original');
+        if (icon.nextSibling !== original) original.before(icon);
+    }
+
     function applyRowStyle(row) {
         Array.from(row.classList).filter(c => c.startsWith('gh-group-')).forEach(c => row.classList.remove(c));
         row.classList.add(getGroupClass(row._groupInfo.id));
+        applyPlatformIcon(row);
         const container = ensureMetaContainer(row);
         row.querySelectorAll('.gh-platform-tag').forEach(tag => tag.remove());
         if (row._groupInfo.showTag) {
@@ -793,7 +814,7 @@
             });
             groups.forEach((groupRows, id) => {
                 if (id === 'meta') {
-                    appendFoldout(parentList, groupRows, 'gh-meta-files-wrapper', '签名 / 校验文件', openGroups.has(id));
+                    appendFoldout(parentList, groupRows, 'gh-meta-files-wrapper', '签名 / 校验 / 配置文件', openGroups.has(id));
                 } else {
                     const main = groupRows.filter(r => !isAuxiliaryFile(getFileNameFromLink(r._nameLink)));
                     const aux = groupRows.filter(r => isAuxiliaryFile(getFileNameFromLink(r._nameLink)));
