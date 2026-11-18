@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Release 增强显示
 // @namespace    http://tampermonkey.net/
-// @version      2.10.3
+// @version      2.10.4
 // @description  github release 所有文件下载量显示；文件安装包分组、添加平台标签与系统图标；根据用户当前系统/架构排序，推荐最可能安装的文件；将相对时间替换为精确时间（兼容手机与PC端）；更新日志可手动折叠
 // @author       caolib
 // @match        https://github.com/*
@@ -46,18 +46,19 @@
 
     registerMenus();
 
-    // Catppuccin Mocha 官方色板：https://catppuccin.com/palette/（只应用于资源分组）
+    // One Dark 官方色板（只应用于资源分组）：
+    // https://github.com/atom/atom/blob/master/packages/one-dark-syntax/styles/colors.less
     const GROUP_COLORS = {
-        win: '#89b4fa',                  // Blue
-        mac: '#cba6f7',                  // Mauve
-        android: '#a6e3a1',              // Green
-        ios: '#f9e2af',                  // Yellow
-        'linux-rpm': '#f38ba8',          // Red
-        'linux-deb': '#fab387',          // Peach
-        'linux-arch': '#f5c2e7',         // Pink
-        'linux-appimage': '#94e2d5',     // Teal
-        'linux-flatpak': '#b4befe',      // Lavender
-        'linux-other': '#a6adc8',        // Subtext 0
+        win: '#61afef',                  // Blue / hue-2
+        mac: '#c678dd',                  // Purple / hue-3
+        android: '#98c379',              // Green / hue-4
+        ios: '#e5c07b',                  // Orange 2 / hue-6-2
+        'linux-rpm': '#e06c75',          // Red 1 / hue-5
+        'linux-deb': '#d19a66',          // Orange 1 / hue-6
+        'linux-arch': '#be5046',         // Red 2 / hue-5-2
+        'linux-appimage': '#56b6c2',     // Cyan / hue-1
+        'linux-flatpak': '#528bff',      // Syntax accent
+        'linux-other': '#abb2bf',        // Default text / mono-1
     };
 
     // --- 注入 CSS 样式 ---
@@ -77,10 +78,12 @@
       ${groupStyles}
       .gh-group-other { border-left: 4px solid transparent !important; }
 
-      /* 平台标签、系统图标与分组共用色板,避免三处颜色不同步。 */
-      .gh-platform-tag { background-color: transparent !important; }
-      .gh-platform-tag, .gh-platform-icon { color: var(--gh-group-color) !important; border-color: var(--gh-group-color) !important; }
+      /* 平台标签跟随分组色板,系统 logo 使用自身配色。 */
+      .gh-platform-tag { background-color: transparent !important; color: var(--gh-group-color) !important; border-color: var(--gh-group-color) !important; }
       .gh-platform-icon { flex-shrink: 0; width: 16px; height: 16px; fill: currentColor; }
+      .gh-platform-icon[data-platform="windows"] { color: #0078d4 !important; }
+      .gh-platform-icon[data-platform="android"] { color: #3ddc84 !important; }
+      .gh-platform-icon[data-platform="apple"] { color: #d1d5db !important; }
       .gh-platform-icon-original { display: none !important; }
 
       /* 第三方代理按钮的下拉菜单样式 */
@@ -343,7 +346,6 @@
         { value: 'linux', label: 'Linux' },
         { value: 'android', label: 'Android' },
         { value: 'ios', label: 'iOS' },
-        { value: 'unknown', label: '系统未知' },
     ];
 
     const ARCH_OPTIONS = [
@@ -351,8 +353,14 @@
         { value: 'arm64', label: 'arm64' },
         { value: 'x86', label: 'x86' },
         { value: 'arm32', label: 'arm32' },
-        { value: 'unknown', label: '架构未知' },
     ];
+
+    function appendAutoOption(select) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = '自动检测';
+        select.appendChild(option);
+    }
 
     function populateArchOptions(select) {
         const preferred = getActiveOS() === 'android' ? ['arm64', 'arm32'] : [];
@@ -368,6 +376,8 @@
             option.selected = opt.value === selectedArch;
             return option;
         }));
+        appendAutoOption(select);
+        if (selectedArch === 'unknown') select.value = '';
     }
 
     function getCurrentArch() {
@@ -673,9 +683,11 @@
     }
 
     /*
-     * 系统 SVG 来自 Bootstrap Icons：https://github.com/twbs/icons/tree/main/icons
+     * Windows/Apple/Android SVG: https://github.com/twbs/icons/tree/main/icons
+     * Linux SVG: https://github.com/icons8/flat-color-icons/blob/master/svg/linux.svg
      * The MIT License (MIT)
      * Copyright (c) 2019-2024 The Bootstrap Authors
+     * Copyright (c) Icons8
      *
      * Permission is hereby granted, free of charge, to any person obtaining a copy
      * of this software and associated documentation files (the "Software"), to deal
@@ -699,8 +711,24 @@
         windows: '<path d="M6.555 1.375 0 2.237v5.45h6.555zM0 13.795l6.555.933V8.313H0zm7.278-5.4.026 6.378L16 16V8.395zM16 0 7.33 1.244v6.414H16z"/>',
         apple: '<path d="M11.182.008C11.148-.03 9.923.023 8.857 1.18c-1.066 1.156-.902 2.482-.878 2.516s1.52.087 2.475-1.258.762-2.391.728-2.43m3.314 11.733c-.048-.096-2.325-1.234-2.113-3.422s1.675-2.789 1.698-2.854-.597-.79-1.254-1.157a3.7 3.7 0 0 0-1.563-.434c-.108-.003-.483-.095-1.254.116-.508.139-1.653.589-1.968.607-.316.018-1.256-.522-2.267-.665-.647-.125-1.333.131-1.824.328-.49.196-1.422.754-2.074 2.237-.652 1.482-.311 3.83-.067 4.56s.625 1.924 1.273 2.796c.576.984 1.34 1.667 1.659 1.899s1.219.386 1.843.067c.502-.308 1.408-.485 1.766-.472.357.013 1.061.154 1.782.539.571.197 1.111.115 1.652-.105.541-.221 1.324-1.059 2.238-2.758q.52-1.185.473-1.282"/>',
         android: '<path d="m10.213 1.471.691-1.26q.069-.124-.048-.192-.128-.057-.195.058l-.7 1.27A4.8 4.8 0 0 0 8.005.941q-1.032 0-1.956.404l-.7-1.27Q5.281-.037 5.154.02q-.117.069-.049.193l.691 1.259a4.25 4.25 0 0 0-1.673 1.476A3.7 3.7 0 0 0 3.5 5.02h9q0-1.125-.623-2.072a4.27 4.27 0 0 0-1.664-1.476ZM6.22 3.303a.37.37 0 0 1-.267.11.35.35 0 0 1-.263-.11.37.37 0 0 1-.107-.264.37.37 0 0 1 .107-.265.35.35 0 0 1 .263-.11q.155 0 .267.11a.36.36 0 0 1 .112.265.36.36 0 0 1-.112.264m4.101 0a.35.35 0 0 1-.262.11.37.37 0 0 1-.268-.11.36.36 0 0 1-.112-.264q0-.154.112-.265a.37.37 0 0 1 .268-.11q.155 0 .262.11a.37.37 0 0 1 .107.265q0 .153-.107.264M3.5 11.77q0 .441.311.75.311.306.76.307h.758l.01 2.182q0 .414.292.703a.96.96 0 0 0 .7.288.97.97 0 0 0 .71-.288.95.95 0 0 0 .292-.703v-2.182h1.343v2.182q0 .414.292.703a.97.97 0 0 0 .71.288.97.97 0 0 0 .71-.288.95.95 0 0 0 .292-.703v-2.182h.76q.436 0 .749-.308.31-.307.311-.75V5.365h-9zm10.495-6.587a.98.98 0 0 0-.702.278.9.9 0 0 0-.293.685v4.063q0 .406.293.69a.97.97 0 0 0 .702.284q.42 0 .712-.284a.92.92 0 0 0 .293-.69V6.146a.9.9 0 0 0-.293-.685 1 1 0 0 0-.712-.278m-12.702.283a1 1 0 0 1 .712-.283q.41 0 .702.283a.9.9 0 0 1 .293.68v4.063a.93.93 0 0 1-.288.69.97.97 0 0 1-.707.284 1 1 0 0 1-.712-.284.92.92 0 0 1-.293-.69V6.146q0-.396.293-.68"/>',
-        // Bootstrap Tux 实心化:保留企鹅轮廓和眼睛/喙,不再镂空腹部。
-        linux: '<path fill-rule="evenodd" d="M8.446.019c2.521.003 2.38 2.66 2.364 4.093-.01.939.509 1.574 1.04 2.244.474.56 1.095 1.38 1.45 2.32.29.765.402 1.613.115 2.465a.8.8 0 0 1 .254.152l.001.002c.207.175.271.447.329.698.058.252.112.488.224.615.344.382.494.667.48.922-.015.254-.203.43-.435.57-.465.28-1.164.491-1.586 1.002-.443.527-.99.83-1.505.871a1.25 1.25 0 0 1-1.256-.716v-.001a1 1 0 0 1-.078-.21c-.67.038-1.252-.165-1.718-.128-.687.038-1.116.204-1.506.206-.151.331-.445.547-.808.63-.5.114-1.126 0-1.743-.324-.577-.306-1.31-.278-1.85-.39-.27-.057-.51-.157-.626-.384-.116-.226-.095-.538.07-.988.051-.16.012-.398-.026-.648a2.5 2.5 0 0 1-.037-.369c0-.133.022-.265.087-.386v-.002c.14-.266.368-.377.577-.451s.397-.125.53-.258c.143-.15.27-.374.443-.56q.036-.037.073-.07c-.081-.538.007-1.105.192-1.662.393-1.18 1.223-2.314 1.811-3.014.502-.713.65-1.287.701-2.016.042-.997-.705-3.974 2.112-4.2q.168-.015.321-.013Z M6.85 2.45a.48 .62 0 1 0 0 1.24a.48 .62 0 1 0 0-1.24Z M8.8 2.3a.58 .65 0 1 0 0 1.3a.58 .65 0 1 0 0-1.3Z M6.55 4.15 7.7 3.55 9.25 4.18 7.8 4.95Z"/>',
+        // 彩色 Tux: Icons8 Flat Color Icons（MIT）,保留上游 SVG 的独立填色。
+        // https://github.com/icons8/flat-color-icons/blob/master/svg/linux.svg
+        // Copyright (c) Icons8 — https://github.com/icons8/flat-color-icons/blob/master/LICENSE.md
+        linux: `<g transform="translate(-5 -7)">
+            <polygon fill="#ECEFF1" points="20.1,18.2 20.2,20.5 18.6,23.5 16.1,28.4 15.6,32.5 17.4,38.3 21.5,40.6 27.7,40.6 33.5,36.2 36.1,29.3 30.1,22 28.4,17.9"/>
+            <path fill="#263238" d="M34.3,23.9c-1.6-2.3-2.9-3.7-3.6-6.6c-0.7-2.9,0.2-2.1-0.4-4.6c-0.3-1.3-0.8-2.2-1.3-2.9c-0.6-0.7-1.3-1.1-1.7-1.2c-0.9-0.5-3-1.3-5.6,0.1c-2.7,1.4-2.4,4.4-1.9,10.5c0,0.4-0.1,0.9-0.3,1.3c-0.4,0.9-1.1,1.7-1.7,2.4c-0.7,1-1.4,2-1.9,3.1c-1.2,2.3-2.3,5.2-2,6.3c0.5-0.1,6.8,9.5,6.8,9.7c0.4-0.1,2.1-0.1,3.6-0.1c2.1-0.1,3.3-0.2,5,0.2c0-0.3-0.1-0.6-0.1-0.9c0-0.6,0.1-1.1,0.2-1.8c0.1-0.5,0.2-1,0.3-1.6c-1,0.9-2.8,1.9-4.5,2.2c-1.5,0.3-4-0.2-5.2-1.7c0.1,0,0.3,0,0.4-0.1c0.3-0.1,0.6-0.2,0.7-0.4c0.3-0.5,0.1-1-0.1-1.3c-0.2-0.3-1.7-1.4-2.4-2c-0.7-0.6-1.1-0.9-1.5-1.3c0,0-0.6-0.6-0.8-0.8c-0.2-0.2-0.3-0.4-0.4-0.5c-0.2-0.5-0.3-1.1-0.2-1.9c0.1-1.1,0.5-2,1-3c0.2-0.4,0.7-1.2,0.7-1.2s-1.7,4.2-0.8,5.5c0,0,0.1-1.3,0.5-2.6c0.3-0.9,0.8-2.2,1.4-2.9s2.1-3.3,2.2-4.9c0-0.7,0.1-1.4,0.1-1.9c-0.4-0.4,6.6-1.4,7-0.3c0.1,0.4,1.5,4,2.3,5.9c0.4,0.9,0.9,1.7,1.2,2.7c0.3,1.1,0.5,2.6,0.5,4.1c0,0.3,0,0.8-0.1,1.3c0.2,0,4.1-4.2-0.5-7.7c0,0,2.8,1.3,2.9,3.9c0.1,2.1-0.8,3.8-1,4.1c0.1,0,2.1,0.9,2.2,0.9c0.4,0,1.2-0.3,1.2-0.3c0.1-0.3,0.4-1.1,0.4-1.4C37.6,29.9,35.9,26.2,34.3,23.9z"/>
+            <ellipse fill="#ECEFF1" cx="21.6" cy="15.3" rx="1.3" ry="2"/>
+            <ellipse fill="#ECEFF1" cx="26.1" cy="15.2" rx="1.7" ry="2.3"/>
+            <ellipse transform="matrix(-0.1254 -0.9921 0.9921 -0.1254 8.9754 38.9969)" fill="#212121" cx="21.7" cy="15.5" rx="1.2" ry="0.7"/>
+            <ellipse fill="#212121" cx="26" cy="15.6" rx="1" ry="1.3"/>
+            <path fill="#FFC107" d="M39.3,37.6c-0.4-0.2-1.1-0.5-1.7-1.4c-0.3-0.5-0.2-1.9-0.7-2.5c-0.3-0.4-0.7-0.2-0.8-0.2c-0.9,0.2-3,1.6-4.4,0c-0.2-0.2-0.5-0.5-1-0.5c-0.5,0-0.7,0.2-0.9,0.6s-0.2,0.7-0.2,1.7c0,0.8,0,1.7-0.1,2.4c-0.2,1.7-0.5,2.7-0.5,3.7c0,1.1,0.3,1.8,0.7,2.1c0.3,0.3,0.8,0.5,1.9,0.5c1.1,0,1.8-0.4,2.5-1.1c0.5-0.5,0.9-0.7,2.3-1.7c1.1-0.7,2.8-1.6,3.1-1.9c0.2-0.2,0.5-0.3,0.5-0.9C40,37.9,39.6,37.7,39.3,37.6z"/>
+            <path fill="#FFC107" d="M19.2,37.9c-1-1.6-1.1-1.9-1.8-2.9c-0.6-1-1.9-2.9-2.7-2.9c-0.6,0-0.9,0.3-1.3,0.7c-0.4,0.4-0.8,1.3-1.5,1.8c-0.6,0.5-2.3,0.4-2.7,1c-0.4,0.6,0.4,1.5,0.4,3c0,0.6-0.5,1-0.6,1.4c-0.1,0.5-0.2,0.8,0,1.2c0.4,0.6,0.9,0.8,4.3,1.5c1.8,0.4,3.5,1.4,4.6,1.5c1.1,0.1,3,0,3-2.7C21,39.9,20.1,39.5,19.2,37.9z"/>
+            <path fill="#FFC107" d="M21.1,19.8C20.5,19.4,20,19,20,18.4c0-0.6,0.4-0.8,1-1.3c0.1-0.1,1.2-1.1,2.3-1.1s2.4,0.7,2.9,0.9c0.9,0.2,1.8,0.4,1.7,1.1c-0.1,1-0.2,1.2-1.2,1.7c-0.7,0.2-2,1.3-2.9,1.3c-0.4,0-1,0-1.4-0.1C22.1,20.8,21.6,20.3,21.1,19.8z"/>
+            <path fill="#634703" d="M20.9,19c0.2,0.2,0.5,0.4,0.8,0.5c0.2,0.1,0.5,0.2,0.5,0.2c0.4,0,0.7,0,0.9,0c0.5,0,1.2-0.2,1.9-0.6c0.7-0.3,0.8-0.5,1.3-0.7c0.5-0.3,1-0.6,0.8-0.7c-0.2-0.1-0.4,0-1.1,0.4c-0.6,0.4-1.1,0.6-1.7,0.9c-0.3,0.1-0.7,0.3-1,0.3c-0.3,0-0.6,0-0.9,0c-0.3,0-0.5-0.1-0.8-0.2c-0.2-0.1-0.3-0.2-0.4-0.2c-0.2-0.1-0.6-0.5-0.8-0.6c0,0-0.2,0-0.1,0.1C20.6,18.7,20.7,18.8,20.9,19z"/>
+            <path fill="#634703" d="M23.9,16.8c0.1,0.2,0.3,0.2,0.4,0.3c0.1,0.1,0.2,0.1,0.2,0.1c0.1-0.1,0-0.3-0.1-0.3C24.4,16.7,23.9,16.7,23.9,16.8z"/>
+            <path fill="#634703" d="M22.3,17c0,0.1,0.2,0.2,0.2,0.1c0.1-0.1,0.2-0.2,0.3-0.2c0.2-0.1,0.1-0.2-0.2-0.2C22.4,16.8,22.4,16.9,22.3,17z"/>
+            <path fill="#455A64" d="M32,34.7c0,0.1,0,0.2,0,0.3c0.2,0.4,0.7,0.5,1.1,0.5c0.6,0,1.2-0.4,1.5-0.8c0-0.1,0.1-0.2,0.2-0.3c0.2-0.3,0.3-0.5,0.4-0.6c0,0-0.1-0.1-0.1-0.2c-0.1-0.2-0.4-0.4-0.8-0.5c-0.3-0.1-0.8-0.2-1-0.2c-0.9-0.1-1.4,0.2-1.7,0.5c0,0,0.1,0,0.1,0.1c0.2,0.2,0.3,0.4,0.3,0.7C32.1,34.4,32,34.5,32,34.7z"/>
+        </g>`,
     };
 
     function applyPlatformIcon(row) {
@@ -718,14 +746,14 @@
         }
         if (!icon) {
             icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-            icon.setAttribute('viewBox', '0 0 16 16');
             icon.setAttribute('width', '16');
             icon.setAttribute('height', '16');
             icon.setAttribute('aria-hidden', 'true');
             icon.setAttribute('focusable', 'false');
         }
         const margins = Array.from(original.classList).filter(c => /^(?:tmp-)?mr-/.test(c));
-        icon.setAttribute('class', ['octicon', 'gh-platform-icon', getTagClass(groupId), ...margins].join(' '));
+        icon.setAttribute('class', ['octicon', 'gh-platform-icon', ...margins].join(' '));
+        icon.setAttribute('viewBox', platform === 'linux' ? '0 0 38 38' : '0 0 16 16');
         if (icon.dataset.platform !== platform) {
             icon.innerHTML = markup;
             icon.dataset.platform = platform;
@@ -1105,17 +1133,20 @@
                 if (opt.value === (_selectedOS || detectedOS)) option.selected = true;
                 select.appendChild(option);
             });
+            appendAutoOption(select);
+            if (!_selectedOS && detectedOS === 'unknown') select.value = '';
 
             // 阻止点击下拉框时折叠/展开 details
             select.addEventListener('click', (e) => e.stopPropagation());
             select.addEventListener('mousedown', (e) => e.stopPropagation());
 
             select.addEventListener('change', () => {
-                _selectedOS = select.value;
-                // 手动切换系统时采用目标平台默认架构,不当作设备检测结果。
-                if (_selectedOS === 'android') _selectedArch = 'arm64';
+                _selectedOS = select.value || null;
+                if (!_selectedOS) {
+                    _selectedArch = null;
+                } else if (_selectedOS === 'android') _selectedArch = 'arm64';
                 else if (['windows', 'mac', 'linux'].includes(_selectedOS)) _selectedArch = 'x86_64';
-                document.querySelectorAll('.gh-os-select').forEach(s => { s.value = _selectedOS; });
+                document.querySelectorAll('.gh-os-select').forEach(s => { s.value = _selectedOS || ''; });
                 document.querySelectorAll('.gh-arch-select').forEach(populateArchOptions);
                 // 强制重新排序所有已处理的 details
                 reprocessAllDetails();
@@ -1131,7 +1162,7 @@
             const archSelect = document.createElement('select');
             archSelect.className = 'gh-arch-select';
             archSelect.setAttribute('aria-label', '目标 CPU 架构');
-            archSelect.title = '浏览器可能隐藏真实架构;显示未知时请手动选择';
+            archSelect.title = '浏览器可能隐藏真实架构；自动检测失败时请手动选择';
             populateArchOptions(archSelect);
 
             // 阻止点击下拉框时折叠/展开 details
@@ -1139,9 +1170,9 @@
             archSelect.addEventListener('mousedown', (e) => e.stopPropagation());
 
             archSelect.addEventListener('change', () => {
-                _selectedArch = archSelect.value;
+                _selectedArch = archSelect.value || null;
                 // 同步所有架构下拉框的选中状态
-                document.querySelectorAll('.gh-arch-select').forEach(s => { s.value = _selectedArch; });
+                document.querySelectorAll('.gh-arch-select').forEach(s => { s.value = _selectedArch || ''; });
                 reprocessAllDetails();
             });
 

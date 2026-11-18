@@ -164,10 +164,19 @@ async function checkPlatformAppearance(browser, engine, mobile, theme) {
         assert.notEqual(android.border, ios.border);
         assert.notEqual(android.background, ios.background);
         for (const appearance of [android, ios]) {
-            for (const key of ['tagColor', 'tagBorder', 'linkColor', 'iconColor', 'iconFill']) {
+            for (const key of ['tagColor', 'tagBorder', 'linkColor']) {
                 assert.equal(appearance[key], appearance.border, `${key} does not match row color`);
             }
+            assert.notEqual(appearance.iconColor, appearance.border);
+            assert.equal(appearance.iconFill, appearance.iconColor);
         }
+        assert.equal(android.iconColor, 'rgb(61, 220, 132)');
+        assert.equal(ios.iconColor, 'rgb(209, 213, 219)');
+        const linuxFills = await page.locator('[data-file="tool-linux-x64.deb"] .gh-platform-icon [fill]').evaluateAll(nodes =>
+            Array.from(new Set(nodes.map(node => node.getAttribute('fill')))));
+        assert.ok(linuxFills.includes('#ECEFF1'));
+        assert.ok(linuxFills.includes('#263238'));
+        assert.ok(linuxFills.includes('#FFC107'));
         for (const [name, platform] of [['tool-win-x64.exe', 'windows'], ['tool-mac-arm64.dmg', 'apple'],
             ['tool-linux-x64.deb', 'linux']]) {
             const icon = page.locator(`[data-file="${name}"] .gh-platform-icon`);

@@ -82,7 +82,9 @@ test('denied Client Hints does not break grouping', async t => {
     });
     await settle();
     assert.ok(w.document.querySelector('.gh-group-win'));
-    assert.equal(w.document.querySelector('.gh-arch-select').value, 'unknown');
+    assert.equal(w.document.querySelector('.gh-arch-select').value, '');
+    assert.equal(Array.from(w.document.querySelector('.gh-arch-select').options).some(option => option.value === 'unknown'), false);
+    assert.equal(Array.from(w.document.querySelector('.gh-os-select').options).some(option => option.value === 'unknown'), false);
 });
 
 for (const [name, expected] of [
@@ -217,6 +219,8 @@ for (const [name, expected] of [
         if (expected) {
             assert.equal(icon.dataset.platform, expected);
             assert.equal(icon.namespaceURI, 'http://www.w3.org/2000/svg');
+            assert.equal(icon.getAttribute('viewBox'), expected === 'linux' ? '0 0 38 38' : '0 0 16 16');
+            assert.equal(Array.from(icon.classList).some(c => c.startsWith('gh-tag-')), false);
             assert.equal(icon.parentElement, wrapper);
             assert.equal(icon.nextSibling, original);
             assert.equal(icon.getAttribute('aria-hidden'), 'true');
@@ -243,7 +247,8 @@ test('platform icons update and restore originals when an asset href changes', a
     await settle();
     assert.equal(asset.querySelector('.gh-platform-icon'), icon);
     assert.equal(icon.dataset.platform, 'apple');
-    assert.ok(icon.classList.contains('gh-tag-ios'));
+    assert.equal(icon.classList.contains('gh-tag-ios'), false);
+    assert.equal(icon.getAttribute('viewBox'), '0 0 16 16');
     link.href = '/owner/repo/releases/download/v1/release.json';
     await settle();
     assert.equal(asset.querySelector('.gh-platform-icon'), null);
